@@ -8,13 +8,13 @@ No patching, no proxying, no credential juggling. The Claude desktop app is an E
 app, so it honours `--user-data-dir`. This is a small launcher built around that.
 
 ```
-+- Claude accounts ----------------------------------------------+
-|  (D) Default        Running  |  Signed in    your original     |
-|  (W) Work           Running  |  Signed in                      |
-|  (P) Personal       Not running  |  Signed out                 |
-|                                                                 |
-|  [Open] [New profile] [Edit] [Shortcut] [Folder] [Refresh icons] [Delete]   Tools |
-+-----------------------------------------------------------------+
++- Claude accounts ---------------------------------------------------------+
+|  (D) Default               Running  |  Signed in       your original      |
+|  (W) Work                  Running  |  Signed in                          |
+|  (P) Personal              Not running  |  Signed out                     |
+|                                                                           |
+|  [Open] [New profile] [Edit] [Shortcut] [Folder] [Refresh icons] [Delete] |
++---------------------------------------------------------------------------+
 ```
 
 ## Why
@@ -148,9 +148,8 @@ resets any shortcuts this tool made to a plain Claude icon, removes display name
 colours and badges, restores `Default`'s taskbar identity if it was badged, and deletes
 the `ClaudeProfileSwitcher` folder. Profile directories and logins are not touched.
 
-Windows that already carry a profile identity keep it until they are restarted; that is
-a Windows limitation. Then `git checkout main` if you also want the previous version of
-the script.
+Windows that already carry a profile identity/icon keep it until Claude is restarted; that is
+a Windows limitation.
 
 ## Limitations
 
