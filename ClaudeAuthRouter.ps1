@@ -65,6 +65,18 @@ if ($Expect) {
 
 if (-not $Url) { Write-RouterLog 'Invoked with no URL.'; return }
 
+function Test-SafeLink {
+    # This URL arrives from the browser through the shell, so it is untrusted, and it ends
+    # up inside a command line for Claude.exe. Windows PowerShell 5.1 cannot pass an
+    # argument vector (ProcessStartInfo.ArgumentList is .NET Core only) and its own
+    # -ArgumentList array is joined without reliable quoting, so the input is validated
+    # instead: claude:// followed only by characters RFC 3986 permits in a URI. That
+    # excludes the quote, backslash, space and control characters an injection needs.
+    param([string]$Link)
+    if ([string]::IsNullOrEmpty($Link) -or $Link.Length -gt 2048) { return $false }
+    return ($Link -cmatch "^claude://[A-Za-z0-9._~:/?#\[\]@!\$&'()*+,;=%-]*$")
+}
+
 function Start-ClaudeWithUrl {
     param([string]$ProfileDir, [string]$Link)
     # If that profile is already running, Electron's single-instance lock hands the URL
@@ -74,6 +86,13 @@ function Start-ClaudeWithUrl {
 }
 
 try {
+    if (-not (Test-SafeLink -Link $Url)) {
+        # Refused rather than passed on: a rejected link is either malformed or an attempt
+        # to smuggle extra arguments. The URL is not logged; it carries a login code.
+        Write-RouterLog 'Refused a claude:// link that failed validation.'
+        return
+    }
+
     if ($Url -notmatch '^claude://login/') {
         Start-ClaudeWithUrl -Link $Url
         Write-RouterLog 'Non-login link; passed to Default.'

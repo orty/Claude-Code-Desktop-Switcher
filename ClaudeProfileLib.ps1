@@ -818,6 +818,7 @@ function Get-ProfileRelaunchCommand {
 }
 
 $script:IconHandles = @{}
+$script:RetiredIcons = New-Object System.Collections.Generic.List[IntPtr]
 
 function Set-WindowIdentity {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][IntPtr]$Hwnd)
@@ -865,11 +866,27 @@ function Update-ProfileIdentity {
             }
         }
     }
+    # New icons are on the windows now, so the previous generation can go.
+    Clear-RetiredIcon
     return $tagged
 }
 
 function Reset-ProfileIconHandle {
+    # Retired rather than destroyed on the spot: a window is still drawing the current
+    # handle, and freeing it out from under the window leaves a broken icon. They are
+    # released by Clear-RetiredIcon once the replacements have been applied.
+    foreach ($entry in $script:IconHandles.Values) {
+        foreach ($k in @('Small', 'Big')) {
+            if ($entry[$k] -and $entry[$k] -ne [IntPtr]::Zero) { $script:RetiredIcons.Add($entry[$k]) }
+        }
+    }
     $script:IconHandles = @{}
+}
+
+function Clear-RetiredIcon {
+    if ($script:RetiredIcons.Count -eq 0) { return }
+    foreach ($h in $script:RetiredIcons) { try { [void][ClaudeProfiles.Native]::DestroyIcon($h) } catch { } }
+    $script:RetiredIcons.Clear()
 }
 
 $script:SwitcherAumid = 'Anthropic.Claude.ProfileSwitcher'
@@ -962,9 +979,9 @@ function Get-PendingLogin {
     if (-not (Test-Path -LiteralPath $script:MarkerPath)) { return $null }
     try {
         $m = Get-Content -LiteralPath $script:MarkerPath -Raw | ConvertFrom-Json
-        if ([datetime]$m.Expires -lt (Get-Date)) { return $null }
+        if ([datetime]$m.Expires -lt (Get-Date)) { Clear-PendingLogin; return $null }
         return [string]$m.Profile
-    } catch { return $null }
+    } catch { Clear-PendingLogin; return $null }
 }
 
 function Clear-PendingLogin { Remove-Item -LiteralPath $script:MarkerPath -Force -ErrorAction SilentlyContinue }
@@ -987,11 +1004,22 @@ function Write-RouterLog {
 
 # ---------------------------------------------------------------- shortcuts --
 
+function Get-SafeFileName {
+    # Display labels are free text, so they can hold characters Windows forbids in a file
+    # name. Without this the shortcut fails to save, and Update-ProfileShortcut would have
+    # already deleted the old one.
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $clean = ($Text -replace '[\\/:*?"<>|]', '-').Trim(" .`t")
+    if (-not $clean) { $clean = 'Profile' }
+    if ($clean.Length -gt 60) { $clean = $clean.Substring(0, 60).TrimEnd(' ', '.') }
+    return $clean
+}
+
 function New-ProfileShortcut {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Directory)
     $look  = Get-ProfileAppearance -Name $Name
     $shell = New-Object -ComObject WScript.Shell
-    $path  = Join-Path $Directory "Claude - $($look.Label).lnk"
+    $path  = Join-Path $Directory "Claude - $(Get-SafeFileName $look.Label).lnk"
     $link  = $shell.CreateShortcut($path)
 
     if ($Name -eq $script:DefaultName -and $script:ClaudeApp.Kind -eq 'Msix') {
