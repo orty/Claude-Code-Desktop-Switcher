@@ -45,12 +45,12 @@ $ErrorActionPreference = 'Stop'
 
 # ========================================================================= CLI ==
 
-function Fail {
+function Exit-WithError {
     param([string]$Message)
     if ($script:Gui) {
         [System.Windows.Forms.MessageBox]::Show($Message, 'Claude Profile Switcher', 'OK', 'Error') | Out-Null
     } else {
-        Write-Host $Message -ForegroundColor Red
+        [Console]::Error.WriteLine($Message)
     }
     exit 1
 }
@@ -58,29 +58,29 @@ function Fail {
 $script:Gui = -not ($Launch -or $List -or $Shortcut -or $Install -or $Status -or $Revert -or $Icons)
 if ($script:Gui) { Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing }
 
-try { Initialize-ClaudeLib -ClaudePathOverride $ClaudePath } catch { Fail $_.Exception.Message }
+try { Initialize-ClaudeLib -ClaudePathOverride $ClaudePath } catch { Exit-WithError $_.Exception.Message }
 
 if ($Revert) {
-    Write-Host 'Undoing everything this tool changed (profile folders and logins are not touched):'
-    foreach ($line in (Revert-SwitcherChanges)) { Write-Host "  - $line" }
-    Write-Host ''
-    Write-Host 'Done. To go back to the original script as well:  git checkout main'
+    'Undoing everything this tool changed (profile folders and logins are not touched):'
+    foreach ($line in (Undo-SwitcherChange)) { "  - $line" }
+    ''
+    'Done. To go back to the original script as well:  git checkout main'
     exit 0
 }
 
 if ($Status) {
-    Write-Host "Install:        $($script:ClaudeApp.Kind)  $($script:ClaudeExe)"
-    Write-Host "Default data:   $($script:DefaultProfilePath)"
-    Write-Host "Profiles root:  $($script:ProfileRoot)"
-    Write-Host "Tool files:     $($script:ToolRoot)"
-    Write-Host "Login handler:  $(if (Test-RouterActive) { 'ours' } else { "Claude's (taken back when a profile is launched)" })"
-    Write-Host "Handler backup: $(Test-Path -LiteralPath $script:BackupPath)"
-    Write-Host "Pending login:  $(if ($p = Get-PendingLogin) { $p } else { 'none' })"
-    Write-Host ''
+    "Install:        $($script:ClaudeApp.Kind)  $($script:ClaudeExe)"
+    "Default data:   $($script:DefaultProfilePath)"
+    "Profiles root:  $($script:ProfileRoot)"
+    "Tool files:     $($script:ToolRoot)"
+    "Login handler:  $(if (Test-RouterActive) { 'ours' } else { "Claude's (taken back when a profile is launched)" })"
+    "Handler backup: $(Test-Path -LiteralPath $script:BackupPath)"
+    "Pending login:  $(if ($p = Get-PendingLogin) { $p } else { 'none' })"
+    ''
     foreach ($pr in (Get-ProfileList)) {
         $state = if ($pr.Pid) { "running (pid $($pr.Pid))" } else { 'not running' }
         $auth  = if ($pr.SignedIn) { 'signed in' } elseif ($pr.SignedIn -eq $false) { 'signed out' } else { 'never used' }
-        Write-Host ("  {0,-22} {1,-22} {2,-11} {3} {4}" -f $pr.Label, $state, $auth, $pr.Color, $pr.Badge)
+        ("  {0,-22} {1,-22} {2,-11} {3} {4}" -f $pr.Label, $state, $auth, $pr.Color, $pr.Badge)
     }
     exit 0
 }
@@ -97,36 +97,45 @@ if ($List) {
 
 if ($Icons) {
     foreach ($pr in (Get-ProfileList)) {
-        Remove-ProfileIcons -Name $pr.Name
-        Write-Host "  $($pr.Label) -> $(Get-ProfileIcoPath -Name $pr.Name)"
+        Remove-ProfileIcon -Name $pr.Name
+        "  $($pr.Label) -> $(Get-ProfileIcoPath -Name $pr.Name)"
     }
     exit 0
 }
 
 if ($Launch) {
     if ($Launch -ne $script:DefaultName -and -not (Test-Path -LiteralPath (Get-ProfilePath -Name $Launch))) {
-        Fail "No profile named '$Launch'. Run .\ClaudeSwitcher.ps1 -List to see them."
+        Exit-WithError "No profile named '$Launch'. Run .\ClaudeSwitcher.ps1 -List to see them."
     }
     Start-ClaudeProfile -Name $Launch -Wait
     exit 0
 }
 
 if ($Shortcut) {
-    if ($Shortcut -ne $script:DefaultName -and -not (Test-Path -LiteralPath (Get-ProfilePath -Name $Shortcut))) { Fail "No profile named '$Shortcut'." }
+    if ($Shortcut -ne $script:DefaultName -and -not (Test-Path -LiteralPath (Get-ProfilePath -Name $Shortcut))) { Exit-WithError "No profile named '$Shortcut'." }
     $dir = if ($To) { $To } else { [Environment]::GetFolderPath('Desktop') }
-    Write-Host "Created $(New-ProfileShortcut -Name $Shortcut -Directory $dir)"
+    "Created $(New-ProfileShortcut -Name $Shortcut -Directory $dir)"
     exit 0
 }
 
 if ($Install) {
-    Write-Host "Created $(New-SwitcherShortcut -Directory ([Environment]::GetFolderPath('Desktop')))"
-    Write-Host "Created $(New-SwitcherShortcut -Directory (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))"
+    "Created $(New-SwitcherShortcut -Directory ([Environment]::GetFolderPath('Desktop')))"
+    "Created $(New-SwitcherShortcut -Directory (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))"
     exit 0
 }
 
 # ========================================================================= GUI ==
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+# A failure inside a button handler would otherwise surface as the raw .NET "Unhandled
+# exception" dialog. Log it and show something readable instead.
+[System.Windows.Forms.Application]::SetUnhandledExceptionMode('CatchException')
+[System.Windows.Forms.Application]::add_ThreadException({
+    param($s, $e)
+    Write-ErrorLog "$($e.Exception.GetType().Name): $($e.Exception.Message)`r`n$($e.Exception.StackTrace)"
+    [System.Windows.Forms.MessageBox]::Show("Something went wrong:`r`n`r`n$($e.Exception.Message)`r`n`r`nDetails were written to:`r`n$($script:ErrorLog)", 'Claude Profile Switcher', 'OK', 'Error') | Out-Null
+})
 
 # When started from a console (the .cmd launcher), hide that console. Started headless
 # there is no console window and this is a no-op.
@@ -158,15 +167,14 @@ $FontTitle = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.Font
 $FontName  = New-Object System.Drawing.Font('Segoe UI', 10.5, [System.Drawing.FontStyle]::Bold)
 $FontBody  = New-Object System.Drawing.Font('Segoe UI', 9)
 $FontSmall = New-Object System.Drawing.Font('Segoe UI', 8.5)
-$FontBadge = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
 
-function Color-FromHex { param([string]$Hex) [System.Drawing.ColorTranslator]::FromHtml($Hex) }
+function ConvertFrom-Hex { param([string]$Hex) [System.Drawing.ColorTranslator]::FromHtml($Hex) }
 
-function Draw-Avatar {
+function Write-Avatar {
     # Shared by the cards and the edit dialog preview: filled circle plus badge text.
     param($g, [int]$Left, [int]$Top, [int]$Size, [string]$Hex, [string]$Glyph)
     $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'ClearTypeGridFit'
-    $brush = New-Object System.Drawing.SolidBrush((Color-FromHex $Hex))
+    $brush = New-Object System.Drawing.SolidBrush((ConvertFrom-Hex $Hex))
     $g.FillEllipse($brush, $Left, $Top, $Size, $Size); $brush.Dispose()
     $font = New-Object System.Drawing.Font('Segoe UI', [float]($Size * $(if ($Glyph.Length -gt 1) { 0.34 } else { 0.42 })), [System.Drawing.FontStyle]::Bold)
     $fmt = New-Object System.Drawing.StringFormat; $fmt.Alignment = 'Center'; $fmt.LineAlignment = 'Center'
@@ -182,7 +190,11 @@ $form.MinimumSize = New-Object System.Drawing.Size(680, 460)
 $form.StartPosition = 'CenterScreen'
 $form.BackColor = $Pal.Page
 $form.Font = $FontBody
-try { $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($script:ClaudeExe) } catch { }
+try {
+    # Own icon and own taskbar identity (otherwise the button shows PowerShell's icon).
+    $form.Icon = New-Object System.Drawing.Icon((Get-SwitcherIcoPath), 32, 32)
+    Set-SwitcherWindowIdentity -Hwnd $form.Handle
+} catch { try { $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($script:ClaudeExe) } catch { } }
 
 $title = New-Object System.Windows.Forms.Label
 $title.Text = 'Claude accounts'; $title.Font = $FontTitle; $title.ForeColor = $Pal.Text
@@ -245,10 +257,10 @@ $script:Signature = ''
 $script:FastUntil = [datetime]::MinValue
 $script:FastFor   = $null
 
-function Selected-Profile { $script:Profiles | Where-Object { $_.Name -eq $script:Selected } | Select-Object -First 1 }
+function Get-SelectedProfile { $script:Profiles | Where-Object { $_.Name -eq $script:Selected } | Select-Object -First 1 }
 
 function Update-Buttons {
-    $p = Selected-Profile
+    $p = Get-SelectedProfile
     $Btn.Open.Enabled    = [bool]$p
     $Btn.Edit.Enabled    = [bool]$p
     $Btn.Desktop.Enabled = [bool]$p
@@ -276,7 +288,7 @@ function New-Card {
         $pen = New-Object System.Drawing.Pen($(if ($sel) { $Pal.BorderSel } else { $Pal.Border }), $(if ($sel) { 2 } else { 1 }))
         $g.DrawRectangle($pen, $rect); $pen.Dispose()
 
-        Draw-Avatar $g 16 14 40 $p.Color $p.Badge
+        Write-Avatar $g 16 14 40 $p.Color $p.Badge
 
         $tb = New-Object System.Drawing.SolidBrush($Pal.Text)
         $g.DrawString($p.Label, $FontName, $tb, 70, 12); $tb.Dispose()
@@ -301,7 +313,7 @@ function New-Card {
     return $card
 }
 
-function Refresh-Profiles {
+function Update-ProfileCard {
     param([switch]$Force)
     $script:Profiles = @(Get-ProfileList)
     $sig = ($script:Profiles | ForEach-Object { "$($_.Name)|$($_.Label)|$($_.Color)|$($_.Badge)|$($_.Pid)|$($_.SignedIn)|$($_.Exists)" }) -join ';'
@@ -319,7 +331,7 @@ function Refresh-Profiles {
 }
 
 function Open-Selected {
-    $p = Selected-Profile; if (-not $p) { return }
+    $p = Get-SelectedProfile; if (-not $p) { return }
     try {
         Start-ClaudeProfile -Name $p.Name
         if (Test-ProfileTaggable -Name $p.Name) {
@@ -348,7 +360,7 @@ function Show-EditDialog {
     $preview = New-Object System.Windows.Forms.Panel
     $preview.Size = New-Object System.Drawing.Size(72, 72); $preview.Location = New-Object System.Drawing.Point(24, 24)
     $preview.BackColor = $Pal.Page
-    $preview.Add_Paint({ param($s, $e) Draw-Avatar $e.Graphics 0 0 72 $look.Color $look.Badge })
+    $preview.Add_Paint({ param($s, $e) Write-Avatar $e.Graphics 0 0 72 $look.Color $look.Badge })
     $dlg.Controls.Add($preview)
 
     $lbl1 = New-Object System.Windows.Forms.Label; $lbl1.Text = 'Display name'; $lbl1.Location = New-Object System.Drawing.Point(116, 22); $lbl1.AutoSize = $true; $lbl1.ForeColor = $Pal.Muted
@@ -365,7 +377,7 @@ function Show-EditDialog {
     foreach ($sw in $script:Palette) {
         $s = New-Object System.Windows.Forms.Button
         $s.Size = New-Object System.Drawing.Size(32, 32); $s.Location = New-Object System.Drawing.Point($sx, 152)
-        $s.FlatStyle = 'Flat'; $s.BackColor = (Color-FromHex $sw.Hex); $s.Tag = $sw.Hex
+        $s.FlatStyle = 'Flat'; $s.BackColor = (ConvertFrom-Hex $sw.Hex); $s.Tag = $sw.Hex
         $s.FlatAppearance.BorderSize = $(if ($sw.Hex -eq $look.Color) { 3 } else { 0 })
         $s.FlatAppearance.BorderColor = $Pal.Text
         $s.Add_Click({
@@ -418,7 +430,7 @@ function Show-EditDialog {
 
     if ($dlg.ShowDialog($form) -eq 'OK') {
         # Regenerate the icon and push the new look to any running window and shortcuts.
-        Reset-ProfileIconHandles
+        Reset-ProfileIconHandle
         Get-ProfileIcoPath -Name $Prof.Name | Out-Null
         if ($Prof.IsDefault -and $Prof.TagDefault -and -not (Test-ProfileTaggable -Name $Prof.Name)) {
             # Option was just turned off: hand the live window back to Claude's identity.
@@ -426,9 +438,9 @@ function Show-EditDialog {
                 [System.Windows.Forms.MessageBox]::Show("Default's taskbar icon goes back to normal the next time Claude is restarted.", 'Edit profile', 'OK', 'Information') | Out-Null
             }
         }
-        Update-ProfileIdentities -Force | Out-Null
-        Update-ProfileShortcuts -Name $Prof.Name
-        Refresh-Profiles -Force
+        Update-ProfileIdentity -Force | Out-Null
+        Update-ProfileShortcut -Name $Prof.Name
+        Update-ProfileCard -Force
     }
     $dlg.Dispose()
 }
@@ -458,7 +470,7 @@ function Show-NewDialog {
         New-ClaudeProfile -Name $n | Out-Null
         Get-ProfileIcoPath -Name $n | Out-Null
         $script:Selected = $n
-        Refresh-Profiles -Force
+        Update-ProfileCard -Force
         if ($open.Checked) { Open-Selected }
     }
     $dlg.Dispose()
@@ -495,41 +507,44 @@ $mi = $menu.Items.Add('Revert all changes made by this tool...')
 $mi.Add_Click({
     $msg = "This puts back the original claude:// login handler, deletes the generated icons, logs and markers, resets profile shortcuts to the plain Claude icon, and removes display names, colours and badges.`r`n`r`nYour profiles, their folders and your logins are NOT touched.`r`n`r`nContinue?"
     if ([System.Windows.Forms.MessageBox]::Show($msg, 'Revert', 'YesNo', 'Warning') -ne 'Yes') { return }
-    $done = Revert-SwitcherChanges
-    Reset-ProfileIconHandles
-    [System.Windows.Forms.MessageBox]::Show(("Done:`r`n - " + ($done -join "`r`n - ") + "`r`n`r`nTo restore the original script too, run:  git checkout main"), 'Revert', 'OK', 'Information') | Out-Null
-    Refresh-Profiles -Force
+    # The timers would re-register the login handler again within seconds; stop them,
+    # revert, report, and close - the next launch starts clean.
+    $tick.Stop(); $fast.Stop()
+    try { $done = Undo-SwitcherChange } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Revert', 'OK', 'Error') | Out-Null; $tick.Start(); return }
+    Reset-ProfileIconHandle
+    [System.Windows.Forms.MessageBox]::Show(("Done:`r`n - " + ($done -join "`r`n - ") + "`r`n`r`nThe switcher will now close. To restore the original script too, run:  git checkout main"), 'Revert', 'OK', 'Information') | Out-Null
+    $form.Close()
 })
 $toolsBtn.Add_Click({ $menu.Show($toolsBtn, (New-Object System.Drawing.Point(0, $toolsBtn.Height))) })
 
 # ---- button actions -----------------------------------------------------------
 $Btn.Open.Add_Click({ Open-Selected })
 $Btn.New.Add_Click({ Show-NewDialog })
-$Btn.Edit.Add_Click({ $p = Selected-Profile; if ($p) { Show-EditDialog $p } })
+$Btn.Edit.Add_Click({ $p = Get-SelectedProfile; if ($p) { Show-EditDialog $p } })
 $Btn.Desktop.Add_Click({
-    $p = Selected-Profile; if (-not $p) { return }
+    $p = Get-SelectedProfile; if (-not $p) { return }
     try {
         $path = New-ProfileShortcut -Name $p.Name -Directory ([Environment]::GetFolderPath('Desktop'))
         [System.Windows.Forms.MessageBox]::Show("Created:`r`n$path`r`n`r`nPin it to the taskbar and it shares a button with the running window.", 'Claude Profile Switcher', 'OK', 'Information') | Out-Null
     } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Claude Profile Switcher', 'OK', 'Error') | Out-Null }
 })
-$Btn.Folder.Add_Click({ $p = Selected-Profile; if ($p -and $p.Exists) { Start-Process explorer.exe -ArgumentList "`"$($p.Path)`"" } })
+$Btn.Folder.Add_Click({ $p = Get-SelectedProfile; if ($p -and $p.Exists) { Start-Process explorer.exe -ArgumentList "`"$($p.Path)`"" } })
 $Btn.Refresh.Add_Click({
     # Rebuild every icon file and push it to running windows and shortcuts.
-    foreach ($pr in $script:Profiles) { Remove-ProfileIcons -Name $pr.Name; Get-ProfileIcoPath -Name $pr.Name | Out-Null; Update-ProfileShortcuts -Name $pr.Name }
-    Reset-ProfileIconHandles; Update-ProfileIdentities -Force | Out-Null
-    Refresh-Profiles -Force
+    foreach ($pr in $script:Profiles) { Remove-ProfileIcon -Name $pr.Name; Get-ProfileIcoPath -Name $pr.Name | Out-Null; Update-ProfileShortcut -Name $pr.Name }
+    Reset-ProfileIconHandle; Update-ProfileIdentity -Force | Out-Null
+    Update-ProfileCard -Force
 })
 $Btn.Delete.Add_Click({
-    $p = Selected-Profile; if (-not $p -or $p.IsDefault) { return }
+    $p = Get-SelectedProfile; if (-not $p -or $p.IsDefault) { return }
     if ($p.Pid) { [System.Windows.Forms.MessageBox]::Show("'$($p.Label)' is running. Close that Claude window first.", 'Delete', 'OK', 'Warning') | Out-Null; return }
     $msg = "Delete the profile '$($p.Label)'?`r`n`r`nThis removes its folder and everything Claude stored in it (the login, local settings, cache). The account itself is not affected.`r`n`r`n$($p.Path)"
     if ([System.Windows.Forms.MessageBox]::Show($msg, 'Delete profile', 'YesNo', 'Warning') -ne 'Yes') { return }
     try {
         Remove-ClaudeProfile -Name $p.Name
-        foreach ($s in (Get-ProfileShortcuts | Where-Object { $_.Profile -eq $p.Name })) { Remove-Item -LiteralPath $s.Path -Force -ErrorAction SilentlyContinue }
+        foreach ($s in (Get-ProfileShortcut | Where-Object { $_.Profile -eq $p.Name })) { Remove-Item -LiteralPath $s.Path -Force -ErrorAction SilentlyContinue }
         $script:Selected = $script:DefaultName
-        Refresh-Profiles -Force
+        Update-ProfileCard -Force
     } catch { [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'Delete profile', 'OK', 'Error') | Out-Null }
 })
 
@@ -540,10 +555,10 @@ $tick = New-Object System.Windows.Forms.Timer
 $tick.Interval = 4000
 $tick.Add_Tick({
     try {
-        Refresh-Profiles
+        Update-ProfileCard
         $extraRunning = @($script:Profiles | Where-Object { $_.Pid -and -not $_.IsDefault }).Count -gt 0
         if ($extraRunning -or ($script:Profiles | Where-Object { $_.IsDefault -and $_.Pid -and $_.TagDefault })) {
-            Update-ProfileIdentities | Out-Null
+            Update-ProfileIdentity | Out-Null
             # Claude reclaims claude:// each time it starts; keep ours in place while a
             # profile that might need to sign in is running.
             if (-not (Test-RouterActive)) { try { Set-RouterRegistration } catch { } }
@@ -557,26 +572,33 @@ $fast = New-Object System.Windows.Forms.Timer
 $fast.Interval = 200
 $fast.Add_Tick({
     try {
-        if ((Get-Date) -gt $script:FastUntil) { $fast.Stop(); Refresh-Profiles; return }
+        if ((Get-Date) -gt $script:FastUntil) { $fast.Stop(); Update-ProfileCard; return }
         $running = Get-RunningProfileMap
         $procId = $running[(Get-ProfilePath -Name $script:FastFor).TrimEnd('\')]
         if (-not $procId) { return }
-        Update-ProfileIdentities | Out-Null
+        Update-ProfileIdentity | Out-Null
         if ([ClaudeProfiles.Native]::WindowsForPid([uint32]$procId, $false).Count -gt 0) {
             # Visible now; one last pass shortly after, then hand over to the slow timer.
             $script:FastUntil = [datetime]::MinValue
             $fast.Stop()
-            Refresh-Profiles
+            Update-ProfileCard
         }
     } catch { }
 })
 
 $form.Add_Shown({
-    Refresh-Profiles -Force
-    try { Update-ProfileIdentities | Out-Null } catch { }
+    Update-ProfileCard -Force
+    try { Update-ProfileIdentity | Out-Null } catch { }
+    try { Update-SwitcherShortcut } catch { }
     $tick.Start()
 })
 $form.Add_FormClosed({ $tick.Stop(); $fast.Stop() })
 $cards.Add_Resize({ foreach ($c in $cards.Controls) { $c.Width = $cards.ClientSize.Width - 8 } })
 
-[void]$form.ShowDialog()
+try {
+    [void]$form.ShowDialog()
+} catch {
+    Write-ErrorLog "$($_.Exception.GetType().Name): $($_.Exception.Message)`r`n$($_.ScriptStackTrace)"
+    [System.Windows.Forms.MessageBox]::Show("The switcher hit an error and has to close:`r`n`r`n$($_.Exception.Message)`r`n`r`nDetails: $($script:ErrorLog)", 'Claude Profile Switcher', 'OK', 'Error') | Out-Null
+    exit 1
+}

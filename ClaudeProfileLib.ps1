@@ -20,6 +20,7 @@ $script:IconDir      = Join-Path $script:ToolRoot 'icons'
 $script:MarkerPath   = Join-Path $script:ToolRoot 'pending-login.json'
 $script:BackupPath   = Join-Path $script:ToolRoot 'protocol-backup.json'
 $script:RouterLog    = Join-Path $script:ToolRoot 'auth-router.log'
+$script:ErrorLog     = Join-Path $script:ToolRoot 'switcher-error.log'
 $script:DefaultName  = 'Default'
 $script:LibDir       = Split-Path $MyInvocation.MyCommand.Path -Parent
 $script:RouterScript = Join-Path $script:LibDir 'ClaudeAuthRouter.ps1'
@@ -213,7 +214,7 @@ function Set-ProfileAppearance {
     if ($entry.Count -eq 0) { $bag.Remove($Name) } else { $bag[$Name] = [pscustomobject]$entry }
     Set-Setting 'Profiles' $(if ($bag.Count) { [pscustomobject]$bag } else { $null })
     # Icons are derived from appearance; drop every old variant for this profile.
-    Remove-ProfileIcons -Name $Name
+    Remove-ProfileIcon -Name $Name
 }
 
 function Test-ProfileLabel {
@@ -231,7 +232,7 @@ function Get-ProfilePath {
     return (Join-Path $script:ProfileRoot $Name)
 }
 
-function Get-ClaudeMainProcesses {
+function Get-ClaudeMainProcess {
     # Main (window-owning) processes of the desktop app only. Two filters matter:
     #   --type=        excludes Electron's renderer/gpu/utility children
     #   ExecutablePath excludes Claude Code's CLI, which is also called claude.exe
@@ -248,7 +249,7 @@ function Get-ClaudeMainProcesses {
 function Get-RunningProfileMap {
     # profile directory -> PID of its main process
     $map = @{}
-    foreach ($p in (Get-ClaudeMainProcesses)) {
+    foreach ($p in (Get-ClaudeMainProcess)) {
         if ($p.CommandLine -match '--user-data-dir="?([^"]+?)"?(\s|$)') {
             $key = $Matches[1].TrimEnd('\')
         } else {
@@ -332,7 +333,7 @@ function Remove-ClaudeProfile {
     $path = Join-Path $script:ProfileRoot $Name
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     Set-ProfileAppearance -Name $Name -Label '' -Color '' -Badge ''
-    Remove-ProfileIcons -Name $Name
+    Remove-ProfileIcon -Name $Name
 }
 
 # ------------------------------------------------------------------ interop --
@@ -624,7 +625,7 @@ namespace ClaudeProfiles
 }
 '@
 
-function Import-NativeTypes {
+function Import-NativeType {
     # Compiling the C# above costs ~6 s on every run. Compile once to a DLL named by a
     # hash of the source and load that; a source change gets a new name automatically.
     if ('ClaudeProfiles.Native' -as [type]) { return }
@@ -640,7 +641,7 @@ function Import-NativeTypes {
     # Loaded from bytes so the file is never locked; -Revert can then delete the folder.
     [void][System.Reflection.Assembly]::Load([System.IO.File]::ReadAllBytes($dll))
 }
-Import-NativeTypes
+Import-NativeType
 
 # -------------------------------------------------------------------- icons --
 
@@ -687,13 +688,43 @@ function New-BadgedBitmap {
     return $bmp
 }
 
+# The switcher's own icon: Claude's mark with a slate badge holding two dots, so the
+# switcher window is told apart from any Claude window on the taskbar.
+function New-SwitcherBitmap {
+    param([int]$Size)
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = 'AntiAlias'; $g.InterpolationMode = 'HighQualityBicubic'
+    $g.Clear([System.Drawing.Color]::Transparent)
+    $hIcon = [ClaudeProfiles.Native]::ExtractIconAt((Resolve-ClaudeIconSource), $Size)
+    if ($hIcon -ne [IntPtr]::Zero) {
+        $ico = [System.Drawing.Icon]::FromHandle($hIcon); $base = $ico.ToBitmap()
+        $g.DrawImage($base, 0, 0, $Size, $Size); $base.Dispose(); $ico.Dispose()
+        [void][ClaudeProfiles.Native]::DestroyIcon($hIcon)
+    }
+    $ratio = if ($Size -le 24) { 0.62 } elseif ($Size -le 48) { 0.52 } else { 0.48 }
+    $d = [int]($Size * $ratio); $x = $Size - $d; $y = $Size - $d
+    $ring = [Math]::Max(1, [int]($Size * 0.055))
+    $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 255, 255, 255))
+    $fill  = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(95, 99, 104))
+    $g.FillEllipse($white, ($x - $ring), ($y - $ring), ($d + 2 * $ring), ($d + 2 * $ring))
+    $g.FillEllipse($fill, $x, $y, $d, $d)
+    # two dots side by side = several accounts
+    $r = [Math]::Max(1, [int]($d * 0.2)); $cy = $y + [int]($d / 2) - $r
+    $g.FillEllipse($white, ($x + [int]($d * 0.22)), $cy, (2 * $r), (2 * $r))
+    $g.FillEllipse($white, ($x + [int]($d * 0.58)), $cy, (2 * $r), (2 * $r))
+    $white.Dispose(); $fill.Dispose(); $g.Dispose()
+    return $bmp
+}
+
 # PNG-compressed .ico (Vista+): 6-byte header, 16-byte entry per image, then the PNGs.
-function Save-ProfileIco {
-    param([Parameter(Mandatory)]$Look, [Parameter(Mandatory)][string]$Path)
+function Save-Ico {
+    param([Parameter(Mandatory)][scriptblock]$Draw, [Parameter(Mandatory)][string]$Path)
     Add-Type -AssemblyName System.Drawing
     $blobs = @()
     foreach ($s in @(16, 24, 32, 48, 64, 256)) {
-        $bmp = New-BadgedBitmap -Look $Look -Size $s
+        $bmp = & $Draw $s
         $ms = New-Object System.IO.MemoryStream
         $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
         $blobs += ,@{ Size = $s; Bytes = $ms.ToArray() }
@@ -717,6 +748,17 @@ function Save-ProfileIco {
     return $Path
 }
 
+function Save-ProfileIco {
+    param([Parameter(Mandatory)]$Look, [Parameter(Mandatory)][string]$Path)
+    Save-Ico -Path $Path -Draw { param($sz) New-BadgedBitmap -Look $Look -Size $sz }
+}
+
+function Get-SwitcherIcoPath {
+    $p = Join-Path $script:IconDir 'switcher.ico'
+    if (-not (Test-Path -LiteralPath $p)) { Save-Ico -Path $p -Draw { param($sz) New-SwitcherBitmap -Size $sz } | Out-Null }
+    return $p
+}
+
 function Get-AppearanceTag {
     # Six hex chars derived from colour + badge. Used in both the icon file name and the
     # taskbar identity, so a change of look is a new file and a new identity: the Windows
@@ -737,7 +779,7 @@ function Get-ProfileIcoPath {
     return $p
 }
 
-function Remove-ProfileIcons {
+function Remove-ProfileIcon {
     param([Parameter(Mandatory)][string]$Name)
     $stem = ($Name -replace '[^\w\-]', '_')
     if (Test-Path -LiteralPath $script:IconDir) {
@@ -804,7 +846,7 @@ function Set-WindowIdentity {
     if ([ClaudeProfiles.Native]::IsVisible($Hwnd)) { [ClaudeProfiles.Native]::RebuildTaskbarButton($Hwnd) }
 }
 
-function Update-ProfileIdentities {
+function Update-ProfileIdentity {
     # One pass: every running extra-profile window that does not carry its AUMID yet
     # gets one. Cheap: one process query plus one property read per Claude window.
     param([switch]$Force)
@@ -826,8 +868,19 @@ function Update-ProfileIdentities {
     return $tagged
 }
 
-function Reset-ProfileIconHandles {
+function Reset-ProfileIconHandle {
     $script:IconHandles = @{}
+}
+
+$script:SwitcherAumid = 'Anthropic.Claude.ProfileSwitcher'
+
+function Set-SwitcherWindowIdentity {
+    # Gives the switcher window its own taskbar button and icon instead of PowerShell's.
+    # Must run before the window is shown: the taskbar reads these when it creates the button.
+    param([Parameter(Mandatory)][IntPtr]$Hwnd)
+    $l = Get-HeadlessLauncher
+    $cmd = '"{0}" {1} -File "{2}"' -f $l.Exe, $l.Prefix, $script:SwitcherScript
+    [ClaudeProfiles.Native]::SetWindowIdentity($Hwnd, $script:SwitcherAumid, $cmd, 'Claude Profile Switcher', "$(Get-SwitcherIcoPath),0")
 }
 
 function Restore-DefaultIdentity {
@@ -916,6 +969,14 @@ function Get-PendingLogin {
 
 function Clear-PendingLogin { Remove-Item -LiteralPath $script:MarkerPath -Force -ErrorAction SilentlyContinue }
 
+function Write-ErrorLog {
+    param([string]$Message)
+    try {
+        New-Item -ItemType Directory -Force -Path $script:ToolRoot | Out-Null
+        Add-Content -LiteralPath $script:ErrorLog -Value ("[{0}] {1}" -f (Get-Date -Format 's'), $Message)
+    } catch { }
+}
+
 function Write-RouterLog {
     param([string]$Message)
     try {
@@ -968,14 +1029,30 @@ function New-SwitcherShortcut {
     $l = Get-HeadlessLauncher
     $link.TargetPath       = $l.Exe
     $link.Arguments        = "$($l.Prefix) -File `"$($script:SwitcherScript)`""
-    $link.IconLocation     = "$($script:ClaudeExe),0"
+    $link.IconLocation     = "$(Get-SwitcherIcoPath),0"
     $link.Description      = 'Switch between Claude desktop accounts'
     $link.WorkingDirectory = $script:LibDir
     $link.Save()
+    try { [ClaudeProfiles.Native]::SetShortcutAumid($link.FullName, $script:SwitcherAumid) } catch { }
     return $link.FullName
 }
 
-function Get-ProfileShortcuts {
+function Update-SwitcherShortcut {
+    # Self-heal: after -Revert the switcher's own shortcuts carry the plain Claude icon
+    # and no identity. Recreate any that do not point at the current switcher icon.
+    $ico = Get-SwitcherIcoPath
+    foreach ($d in @([Environment]::GetFolderPath('Desktop'), (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))) {
+        $lnk = Join-Path $d 'Claude Profile Switcher.lnk'
+        if (-not (Test-Path -LiteralPath $lnk)) { continue }
+        $shell = New-Object -ComObject WScript.Shell
+        if ($shell.CreateShortcut($lnk).IconLocation -notlike "$ico*") {
+            Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
+            New-SwitcherShortcut -Directory $d | Out-Null
+        }
+    }
+}
+
+function Get-ProfileShortcut {
     # Every .lnk on the desktop or Start menu that launches one of our profiles.
     $dirs = @([Environment]::GetFolderPath('Desktop'), (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))
     $shell = New-Object -ComObject WScript.Shell
@@ -990,10 +1067,10 @@ function Get-ProfileShortcuts {
     }
 }
 
-function Update-ProfileShortcuts {
+function Update-ProfileShortcut {
     # After an appearance change: rewrite each shortcut for that profile in place.
     param([Parameter(Mandatory)][string]$Name)
-    foreach ($s in (Get-ProfileShortcuts | Where-Object { $_.Profile -eq $Name })) {
+    foreach ($s in (Get-ProfileShortcut | Where-Object { $_.Profile -eq $Name })) {
         $dir = Split-Path $s.Path -Parent
         Remove-Item -LiteralPath $s.Path -Force -ErrorAction SilentlyContinue
         New-ProfileShortcut -Name $Name -Directory $dir | Out-Null
@@ -1044,12 +1121,12 @@ function Start-ClaudeProfile {
     # Claude has re-registered claude:// by now; take it back and make sure the icon stuck.
     Start-Sleep -Milliseconds 1500
     try { if (-not (Test-RouterActive)) { Set-RouterRegistration } } catch { }
-    Update-ProfileIdentities | Out-Null
+    Update-ProfileIdentity | Out-Null
 }
 
 # ------------------------------------------------------------------- revert --
 
-function Revert-SwitcherChanges {
+function Undo-SwitcherChange {
     # Undo everything this tool adds beyond the original switcher. Never touches a
     # profile folder or anything Claude owns. Returns the list of actions taken.
     $done = New-Object System.Collections.Generic.List[string]
@@ -1060,20 +1137,33 @@ function Revert-SwitcherChanges {
         Set-Setting 'DefaultOriginalAumid' $null
     }
 
-    foreach ($s in @(Get-ProfileShortcuts)) {
+    foreach ($s in @(Get-ProfileShortcut)) {
         # Recreate as a plain shortcut: Claude's icon, no AUMID stamp.
         $shell = New-Object -ComObject WScript.Shell
         $link  = $shell.CreateShortcut($s.Path)
         $link.IconLocation = "$($script:ClaudeExe),0"
         $link.Save()
         # WScript cannot clear a property store, so rebuild the file from scratch.
-        $tmp = $s.Path + '.tmp'
+        $tmp = [System.IO.Path]::ChangeExtension($s.Path, '.tmp.lnk')   # WScript insists on a .lnk name
         $copy = $shell.CreateShortcut($tmp)
         $copy.TargetPath = $link.TargetPath; $copy.Arguments = $link.Arguments
         $copy.IconLocation = $link.IconLocation; $copy.Description = $link.Description
         $copy.WorkingDirectory = $link.WorkingDirectory; $copy.Save()
         Move-Item -LiteralPath $tmp -Destination $s.Path -Force
         $done.Add("reset shortcut $(Split-Path $s.Path -Leaf)")
+    }
+
+    foreach ($d in @([Environment]::GetFolderPath('Desktop'), (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))) {
+        $lnk = Join-Path $d 'Claude Profile Switcher.lnk'
+        if (-not (Test-Path -LiteralPath $lnk)) { continue }
+        # Rebuild from scratch: plain Claude icon, no identity stamp, same target.
+        $shell = New-Object -ComObject WScript.Shell
+        $old = $shell.CreateShortcut($lnk); $tmp = [System.IO.Path]::ChangeExtension($lnk, '.tmp.lnk')
+        $new = $shell.CreateShortcut($tmp)
+        $new.TargetPath = $old.TargetPath; $new.Arguments = $old.Arguments; $new.WorkingDirectory = $old.WorkingDirectory
+        $new.Description = $old.Description; $new.IconLocation = "$($script:ClaudeExe),0"; $new.Save()
+        Move-Item -LiteralPath $tmp -Destination $lnk -Force
+        $done.Add("reset shortcut $(Split-Path $lnk -Leaf)")
     }
 
     if (Get-Setting 'Profiles') { Set-Setting 'Profiles' $null; $done.Add('removed display names, colours and badges from settings.json') }

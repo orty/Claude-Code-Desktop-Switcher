@@ -37,27 +37,27 @@ $ErrorActionPreference = 'Stop'
 try { Initialize-ClaudeLib } catch { Write-RouterLog "FAILED to locate Claude: $($_.Exception.Message)"; throw }
 
 if ($Status) {
-    Write-Host "Handler key:     $($script:CmdPath)"
-    Write-Host "Current command: $(if (Test-Path -LiteralPath $script:CmdPath) { (Get-ItemProperty $script:CmdPath).'(default)' } else { '<none>' })"
-    Write-Host "Router active:   $(if (Test-RouterActive) { 'yes' } else { 'no - Claude owns the scheme until a profile is launched' })"
-    Write-Host "Backup saved:    $(Test-Path -LiteralPath $script:BackupPath)"
-    Write-Host "Pending login:   $(if ($p = Get-PendingLogin) { $p } else { '<none>' })"
-    Write-Host "Log:             $($script:RouterLog)"
-    Write-Host ''
-    Write-Host 'Running profiles:'
+    "Handler key:     $($script:CmdPath)"
+    "Current command: $(if (Test-Path -LiteralPath $script:CmdPath) { (Get-ItemProperty $script:CmdPath).'(default)' } else { '<none>' })"
+    "Router active:   $(if (Test-RouterActive) { 'yes' } else { 'no - Claude owns the scheme until a profile is launched' })"
+    "Backup saved:    $(Test-Path -LiteralPath $script:BackupPath)"
+    "Pending login:   $(if ($p = Get-PendingLogin) { $p } else { '<none>' })"
+    "Log:             $($script:RouterLog)"
+    ''
+    'Running profiles:'
     foreach ($pr in (Get-ProfileList | Where-Object Pid)) {
-        Write-Host ("  {0,-20} pid {1,-7} {2}" -f $pr.Label, $pr.Pid, $(if ($pr.SignedIn) { 'signed in' } elseif ($pr.SignedIn -eq $false) { 'SIGNED OUT' } else { 'unknown' }))
+        ("  {0,-20} pid {1,-7} {2}" -f $pr.Label, $pr.Pid, $(if ($pr.SignedIn) { 'signed in' } elseif ($pr.SignedIn -eq $false) { 'SIGNED OUT' } else { 'unknown' }))
     }
     return
 }
 
-if ($Register)   { Set-RouterRegistration; Write-Host 'Registered as the claude:// handler.'; return }
-if ($Unregister) { Write-Host (Restore-RouterRegistration); Clear-PendingLogin; return }
+if ($Register)   { Set-RouterRegistration; 'Registered as the claude:// handler.'; return }
+if ($Unregister) { Restore-RouterRegistration; Clear-PendingLogin; return }
 
 if ($Expect) {
     Set-PendingLogin -Name $Expect -Minutes $Minutes
     if (-not (Test-RouterActive)) { Set-RouterRegistration }
-    Write-Host "Next login callback within $Minutes minutes goes to '$Expect'."
+    "Next login callback within $Minutes minutes goes to '$Expect'."
     return
 }
 
@@ -69,8 +69,8 @@ function Start-ClaudeWithUrl {
     param([string]$ProfileDir, [string]$Link)
     # If that profile is already running, Electron's single-instance lock hands the URL
     # to the existing window instead of starting a second copy.
-    $args = if ($ProfileDir) { '--user-data-dir="{0}" "{1}"' -f $ProfileDir, $Link } else { '"{0}"' -f $Link }
-    Start-Process -FilePath $script:ClaudeExe -ArgumentList $args -WindowStyle Normal
+    $argLine = if ($ProfileDir) { '--user-data-dir="{0}" "{1}"' -f $ProfileDir, $Link } else { '"{0}"' -f $Link }
+    Start-Process -FilePath $script:ClaudeExe -ArgumentList $argLine -WindowStyle Normal
 }
 
 try {
