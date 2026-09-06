@@ -392,7 +392,7 @@ function Show-EditDialog {
         $rowY = 224
     }
     $hint = New-Object System.Windows.Forms.Label
-    $hint.Text = $(if ($Prof.IsDefault) { 'Leave this off if you keep Claude pinned to the taskbar: a badged window no longer matches the pinned icon and shows as a second button.' } else { 'Changes apply to the taskbar icon, the window and any shortcuts.' })
+    $hint.Text = $(if ($Prof.IsDefault) { 'Leave this off if you keep Claude pinned to the taskbar: a badged window no longer matches the pinned icon and shows as a second button.' } else { 'Applies to the taskbar icon, the window and desktop shortcuts. If this profile is pinned to the taskbar, unpin it and pin the refreshed shortcut again.' })
     $hint.Location = New-Object System.Drawing.Point(24, $rowY); $hint.Size = New-Object System.Drawing.Size(390, 40); $hint.ForeColor = $Pal.Muted; $hint.Font = $FontSmall
     $dlg.Controls.Add($hint)
 

@@ -717,14 +717,19 @@ function Save-ProfileIco {
     return $Path
 }
 
+function Get-AppearanceTag {
+    # Six hex chars derived from colour + badge. Used in both the icon file name and the
+    # taskbar identity, so a change of look is a new file and a new identity: the Windows
+    # 11 taskbar reads a group's icon once per identity and never refreshes it.
+    param([Parameter(Mandatory)]$Look)
+    return [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
+        [Text.Encoding]::UTF8.GetBytes("$($Look.Color)|$($Look.Badge)"))).Replace('-', '').Substring(0, 6).ToLower()
+}
+
 function Get-ProfileIcoPath {
-    # The file name carries a hash of the colour and badge. Windows caches icons by
-    # path, so overwriting a file in place would leave the taskbar showing the old
-    # picture; a new appearance must be a new file name.
     param([Parameter(Mandatory)][string]$Name, [switch]$NoCreate)
     $look = Get-ProfileAppearance -Name $Name
-    $tag  = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
-                [Text.Encoding]::UTF8.GetBytes("$($look.Color)|$($look.Badge)"))).Replace('-', '').Substring(0, 6).ToLower()
+    $tag  = Get-AppearanceTag -Look $look
     $p = Join-Path $script:IconDir (($Name -replace '[^\w\-]', '_') + "-$tag.ico")
     if (-not $NoCreate -and -not (Test-Path -LiteralPath $p)) {
         Save-ProfileIco -Look $look -Path $p | Out-Null
@@ -747,8 +752,10 @@ function Remove-ProfileIcons {
 # existing pinned Claude icon still matches it. Only extra profiles get identities.
 
 function Get-ProfileAumid {
+    # Includes the appearance tag: see Get-AppearanceTag for why.
     param([Parameter(Mandatory)][string]$Name)
-    return $script:AumidPrefix + ($Name -replace '[^\w\.]', '_')
+    $tag = Get-AppearanceTag -Look (Get-ProfileAppearance -Name $Name)
+    return $script:AumidPrefix + ($Name -replace '[^\w\.]', '_') + '.' + $tag
 }
 
 function Get-HeadlessLauncher {
@@ -785,8 +792,10 @@ function Set-WindowIdentity {
     [ClaudeProfiles.Native]::SetWindowIdentity($Hwnd, $aumid, (Get-ProfileRelaunchCommand -Name $Name), "Claude - $($look.Label)", "$ico,0")
 
     if (-not $script:IconHandles.ContainsKey($Name)) {
-        $small = New-BadgedBitmap -Look $look -Size 16
-        $big   = New-BadgedBitmap -Look $look -Size 32
+        # Windows 11 applies WM_SETICON icons below a DPI-dependent size to the window
+        # frame only and leaves the taskbar untouched; a 256 px icon updates both.
+        $small = New-BadgedBitmap -Look $look -Size 256
+        $big   = New-BadgedBitmap -Look $look -Size 256
         $script:IconHandles[$Name] = @{ Small = $small.GetHicon(); Big = $big.GetHicon() }
         $small.Dispose(); $big.Dispose()
     }
@@ -807,6 +816,8 @@ function Update-ProfileIdentities {
         $want = Get-ProfileAumid -Name $name
         foreach ($h in [ClaudeProfiles.Native]::WindowsForPid([uint32]$running[$dir], $true)) {
             $have = try { [ClaudeProfiles.Native]::GetWindowAumid($h) } catch { $null }
+            # $want already reflects the current look, so an appearance change shows up
+            # here as a mismatch and the window moves to its new identity on its own.
             if ($Force -or $have -ne $want) {
                 try { Set-WindowIdentity -Name $name -Hwnd $h; $tagged++ } catch { }
             }
