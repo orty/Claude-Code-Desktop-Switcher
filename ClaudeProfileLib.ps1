@@ -182,13 +182,24 @@ function Get-ProfileAppearance {
     $color = if ($entry -and $entry.Color -match '^#[0-9A-Fa-f]{6}$') { [string]$entry.Color } else { Get-DefaultColor $Name }
     $badge = if ($entry -and $entry.Badge) { [string]$entry.Badge } else { $label.Substring(0, 1).ToUpper() }
     if ($badge.Length -gt 2) { $badge = $badge.Substring(0, 2) }
-    return [pscustomobject]@{ Name = $Name; Label = $label; Color = $color; Badge = $badge }
+    # TagDefault: opt-in for the Default profile to get a badge and its own taskbar
+    # identity too. Off by default because a pinned Claude icon then stops matching it.
+    $tagDefault = [bool]($entry -and $entry.TagDefault)
+    return [pscustomobject]@{ Name = $Name; Label = $label; Color = $color; Badge = $badge; TagDefault = $tagDefault }
+}
+
+function Test-ProfileTaggable {
+    # Extra profiles always; Default only when the user opted in.
+    param([Parameter(Mandatory)][string]$Name)
+    if ($Name -ne $script:DefaultName) { return $true }
+    return (Get-ProfileAppearance -Name $Name).TagDefault
 }
 
 function Set-ProfileAppearance {
     param(
         [Parameter(Mandatory)][string]$Name,
-        [string]$Label, [string]$Color, [string]$Badge
+        [string]$Label, [string]$Color, [string]$Badge,
+        [object]$TagDefault
     )
     $all = Get-Setting 'Profiles'
     $bag = [ordered]@{}
@@ -198,11 +209,11 @@ function Set-ProfileAppearance {
     if ($PSBoundParameters.ContainsKey('Label')) { if ($Label) { $entry['Label'] = $Label.Trim() } else { $entry.Remove('Label') } }
     if ($PSBoundParameters.ContainsKey('Color')) { if ($Color) { $entry['Color'] = $Color } else { $entry.Remove('Color') } }
     if ($PSBoundParameters.ContainsKey('Badge')) { if ($Badge) { $entry['Badge'] = $Badge.Trim() } else { $entry.Remove('Badge') } }
+    if ($PSBoundParameters.ContainsKey('TagDefault')) { if ($TagDefault) { $entry['TagDefault'] = $true } else { $entry.Remove('TagDefault') } }
     if ($entry.Count -eq 0) { $bag.Remove($Name) } else { $bag[$Name] = [pscustomobject]$entry }
     Set-Setting 'Profiles' $(if ($bag.Count) { [pscustomobject]$bag } else { $null })
-    # Icons are derived from appearance, so throw the stale one away.
-    $ico = Get-ProfileIcoPath -Name $Name -NoCreate
-    if (Test-Path -LiteralPath $ico) { Remove-Item -LiteralPath $ico -Force -ErrorAction SilentlyContinue }
+    # Icons are derived from appearance; drop every old variant for this profile.
+    Remove-ProfileIcons -Name $Name
 }
 
 function Test-ProfileLabel {
@@ -278,6 +289,7 @@ function Get-ProfileList {
             Label     = $look.Label
             Color     = $look.Color
             Badge     = $look.Badge
+            TagDefault= $look.TagDefault
             Path      = $Path
             IsDefault = $IsDefault
             Exists    = $exists
@@ -320,6 +332,7 @@ function Remove-ClaudeProfile {
     $path = Join-Path $script:ProfileRoot $Name
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     Set-ProfileAppearance -Name $Name -Label '' -Color '' -Badge ''
+    Remove-ProfileIcons -Name $Name
 }
 
 # ------------------------------------------------------------------ interop --
@@ -650,9 +663,11 @@ function New-BadgedBitmap {
         [void][ClaudeProfiles.Native]::DestroyIcon($hIcon)
     }
 
-    $d    = [int]($Size * 0.48)
-    $x    = $Size - $d - [int]($Size * 0.02)
-    $y    = $Size - $d - [int]($Size * 0.02)
+    # Small sizes get a proportionally larger badge so the letter stays legible.
+    $ratio = if ($Size -le 24) { 0.62 } elseif ($Size -le 48) { 0.52 } else { 0.48 }
+    $d    = [int]($Size * $ratio)
+    $x    = $Size - $d
+    $y    = $Size - $d
     $ring = [Math]::Max(1, [int]($Size * 0.055))
     $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 255, 255, 255))
     $fill  = New-Object System.Drawing.SolidBrush($col)
@@ -660,8 +675,8 @@ function New-BadgedBitmap {
     $g.FillEllipse($fill, $x, $y, $d, $d)
     $white.Dispose(); $fill.Dispose()
 
-    if ($Size -ge 32) {
-        $scale = if ($Look.Badge.Length -gt 1) { 0.5 } else { 0.66 }
+    if ($Size -ge 16) {
+        $scale = if ($Look.Badge.Length -gt 1) { 0.5 } else { 0.7 }
         $font = New-Object System.Drawing.Font('Segoe UI', [float]($d * $scale), [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
         $fmt = New-Object System.Drawing.StringFormat
         $fmt.Alignment = 'Center'; $fmt.LineAlignment = 'Center'
@@ -703,12 +718,27 @@ function Save-ProfileIco {
 }
 
 function Get-ProfileIcoPath {
+    # The file name carries a hash of the colour and badge. Windows caches icons by
+    # path, so overwriting a file in place would leave the taskbar showing the old
+    # picture; a new appearance must be a new file name.
     param([Parameter(Mandatory)][string]$Name, [switch]$NoCreate)
-    $p = Join-Path $script:IconDir (($Name -replace '[^\w\-]', '_') + '.ico')
+    $look = Get-ProfileAppearance -Name $Name
+    $tag  = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes("$($look.Color)|$($look.Badge)"))).Replace('-', '').Substring(0, 6).ToLower()
+    $p = Join-Path $script:IconDir (($Name -replace '[^\w\-]', '_') + "-$tag.ico")
     if (-not $NoCreate -and -not (Test-Path -LiteralPath $p)) {
-        Save-ProfileIco -Look (Get-ProfileAppearance -Name $Name) -Path $p | Out-Null
+        Save-ProfileIco -Look $look -Path $p | Out-Null
     }
     return $p
+}
+
+function Remove-ProfileIcons {
+    param([Parameter(Mandatory)][string]$Name)
+    $stem = ($Name -replace '[^\w\-]', '_')
+    if (Test-Path -LiteralPath $script:IconDir) {
+        Get-ChildItem -LiteralPath $script:IconDir -Filter "$stem-*.ico" -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ----------------------------------------------------------------- identity --
@@ -742,7 +772,12 @@ $script:IconHandles = @{}
 
 function Set-WindowIdentity {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][IntPtr]$Hwnd)
-    if ($Name -eq $script:DefaultName) { return }
+    if (-not (Test-ProfileTaggable -Name $Name)) { return }
+    if ($Name -eq $script:DefaultName -and -not (Get-Setting 'DefaultOriginalAumid')) {
+        # Remember what Claude set, so the option can be turned off cleanly later.
+        $orig = try { [ClaudeProfiles.Native]::GetWindowAumid($Hwnd) } catch { $null }
+        if ($orig -and $orig -notlike "$($script:AumidPrefix)*") { Set-Setting 'DefaultOriginalAumid' $orig }
+    }
     $look  = Get-ProfileAppearance -Name $Name
     $ico   = Get-ProfileIcoPath -Name $Name
     $aumid = Get-ProfileAumid -Name $Name
@@ -767,8 +802,8 @@ function Update-ProfileIdentities {
     $tagged = 0
     $running = Get-RunningProfileMap
     foreach ($dir in $running.Keys) {
-        if ($dir -eq $script:DefaultProfilePath.TrimEnd('\')) { continue }
-        $name = Split-Path $dir -Leaf
+        $name = if ($dir -eq $script:DefaultProfilePath.TrimEnd('\')) { $script:DefaultName } else { Split-Path $dir -Leaf }
+        if (-not (Test-ProfileTaggable -Name $name)) { continue }
         $want = Get-ProfileAumid -Name $name
         foreach ($h in [ClaudeProfiles.Native]::WindowsForPid([uint32]$running[$dir], $true)) {
             $have = try { [ClaudeProfiles.Native]::GetWindowAumid($h) } catch { $null }
@@ -782,6 +817,28 @@ function Update-ProfileIdentities {
 
 function Reset-ProfileIconHandles {
     $script:IconHandles = @{}
+}
+
+function Restore-DefaultIdentity {
+    # Put Default's live window back to Claude's own identity and icon. Used when the
+    # option is turned off and by -Revert. Without a remembered original AUMID the
+    # window keeps ours until Claude is restarted.
+    $running = Get-RunningProfileMap
+    $procId = $running[$script:DefaultProfilePath.TrimEnd('\')]
+    if (-not $procId) { return $false }
+    $orig = Get-Setting 'DefaultOriginalAumid'
+    Add-Type -AssemblyName System.Drawing
+    $ico = try { [System.Drawing.Icon]::ExtractAssociatedIcon($script:ClaudeExe) } catch { $null }
+    foreach ($h in [ClaudeProfiles.Native]::WindowsForPid([uint32]$procId, $true)) {
+        $have = try { [ClaudeProfiles.Native]::GetWindowAumid($h) } catch { $null }
+        if ($have -notlike "$($script:AumidPrefix)*") { continue }
+        if ($orig) {
+            try { [ClaudeProfiles.Native]::SetWindowIdentity($h, $orig, "`"$($script:ClaudeExe)`"", 'Claude', "$($script:ClaudeExe),0") } catch { }
+        }
+        if ($ico) { [ClaudeProfiles.Native]::ApplyIcon($h, $ico.Handle, $ico.Handle) }
+        if ([ClaudeProfiles.Native]::IsVisible($h)) { try { [ClaudeProfiles.Native]::RebuildTaskbarButton($h) } catch { } }
+    }
+    return [bool]$orig
 }
 
 # ------------------------------------------------------------- login router --
@@ -937,26 +994,25 @@ function Update-ProfileShortcuts {
 function Start-ClaudeProfile {
     param([Parameter(Mandatory)][string]$Name, [switch]$Wait)
 
+    $path = Get-ProfilePath -Name $Name
     if ($Name -eq $script:DefaultName) {
         if ($script:ClaudeApp.Kind -eq 'Msix') {
             Start-Process 'explorer.exe' -ArgumentList "shell:AppsFolder\$($script:ClaudeApp.AppUserModelId)"
         } else {
             Start-Process -FilePath $script:ClaudeExe -WindowStyle Normal
         }
-        return
+    } else {
+        if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
+        # -WindowStyle Normal matters: shortcuts run us hidden, and without an explicit
+        # show state Claude would inherit ours and start with an invisible window.
+        Start-Process -FilePath $script:ClaudeExe -ArgumentList "--user-data-dir=`"$path`"" -WindowStyle Normal
+
+        # A signed-out profile being launched is very likely about to sign in.
+        if ((Test-ProfileSignedIn -Path $path) -ne $true) { Set-PendingLogin -Name $Name }
+        try { if (-not (Test-RouterActive)) { Set-RouterRegistration } } catch { }
     }
 
-    $path = Get-ProfilePath -Name $Name
-    if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
-    # -WindowStyle Normal matters: shortcuts run us hidden, and without an explicit
-    # show state Claude would inherit ours and start with an invisible window.
-    Start-Process -FilePath $script:ClaudeExe -ArgumentList "--user-data-dir=`"$path`"" -WindowStyle Normal
-
-    # A signed-out profile being launched is very likely about to sign in.
-    if ((Test-ProfileSignedIn -Path $path) -ne $true) { Set-PendingLogin -Name $Name }
-    try { if (-not (Test-RouterActive)) { Set-RouterRegistration } } catch { }
-
-    if (-not $Wait) { return }
+    if (-not $Wait -or -not (Test-ProfileTaggable -Name $Name)) { return }
 
     # Tag the window as early as possible: polling at 200 ms usually catches it while
     # Electron still has it hidden, so the taskbar button is born with the right identity.
@@ -988,6 +1044,10 @@ function Revert-SwitcherChanges {
     $done = New-Object System.Collections.Generic.List[string]
     $done.Add((Restore-RouterRegistration))
     Clear-PendingLogin
+    if (Get-Setting 'DefaultOriginalAumid') {
+        if (Restore-DefaultIdentity) { $done.Add("restored Default's own taskbar identity") }
+        Set-Setting 'DefaultOriginalAumid' $null
+    }
 
     foreach ($s in @(Get-ProfileShortcuts)) {
         # Recreate as a plain shortcut: Claude's icon, no AUMID stamp.
