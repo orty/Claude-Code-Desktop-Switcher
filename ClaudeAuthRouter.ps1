@@ -72,9 +72,10 @@ function Test-SafeLink {
     # -ArgumentList array is joined without reliable quoting, so the input is validated
     # instead: claude:// followed only by characters RFC 3986 permits in a URI. That
     # excludes the quote, backslash, space and control characters an injection needs.
+    # Anchored with \z, not $: in .NET $ also matches before a trailing newline.
     param([string]$Link)
     if ([string]::IsNullOrEmpty($Link) -or $Link.Length -gt 2048) { return $false }
-    return ($Link -cmatch "^claude://[A-Za-z0-9._~:/?#\[\]@!\$&'()*+,;=%-]*$")
+    return ($Link -cmatch "^claude://[A-Za-z0-9._~:/?#\[\]@!\$&'()*+,;=%-]*\z")
 }
 
 function Start-ClaudeWithUrl {
