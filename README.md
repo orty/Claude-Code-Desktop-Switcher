@@ -119,7 +119,8 @@ re-registers itself as that handler every time it starts. The switcher takes the
 whenever it launches a profile, and `ClaudeAuthRouter.ps1` forwards each login callback
 to, in order: a profile explicitly expecting a login, otherwise the one running profile
 that is signed out, otherwise the profile whose window you most recently used, otherwise
-`Default`. Only sign-in callbacks (`claude://login/...` and `claude://claude.ai/sso-callback...`) are routed; anything else behaves as before.
+`Default`. Only sign-in callbacks (`claude://login/...` and
+`claude://claude.ai/sso-callback...`) are routed; anything else behaves as before.
 Sign-in state is read from each profile's `config.json` by key presence and value length
 only; no token is ever read.
 
@@ -139,7 +140,8 @@ shortcuts working after Claude updates itself.
 | `%LOCALAPPDATA%\ClaudeProfiles\<Name>\` | a profile's data. Claude's, never modified by this tool |
 | `%LOCALAPPDATA%\ClaudeProfiles\settings.json` | this tool's settings: remembered install, display names, colours, badges |
 | `%LOCALAPPDATA%\ClaudeProfileSwitcher\` | generated files: icons, logs, the compiled helper, a backup of the original `claude://` handler. Disposable |
-| `HKCU\Software\Classes\claude\shell\open\command` | the one registry value this tool changes, backed up before the first change |
+| `HKCU\Software\Classes\claude\shell\open\command` | the `claude://` handler, pointed at the router; the original is backed up before the first change |
+| `HKCU\Software\Classes\ClaudeProfileRouter.claude`, `HKCU\Software\ClaudeProfileSwitcher`, `HKCU\Software\RegisteredApplications\ClaudeProfileRouter` | register the router as an app you can pick in Settings > Default apps, which the Store build needs. Added by this tool, removed on revert |
 
 ## Revert
 
@@ -147,6 +149,10 @@ shortcuts working after Claude updates itself.
 resets any shortcuts this tool made to a plain Claude icon, removes display names,
 colours and badges, restores `Default`'s taskbar identity if it was badged, and deletes
 the `ClaudeProfileSwitcher` folder. Profile directories and logins are not touched.
+
+If you picked Claude Profile Router in Settings > Default apps, only Settings can undo
+that choice. Revert then keeps its `ClaudeProfileRouter.claude` entry, pointed straight at
+Claude so links keep working, and asks you to pick Claude there again.
 
 Windows that already carry a profile identity/icon keep it until Claude is restarted; that is
 a Windows limitation.

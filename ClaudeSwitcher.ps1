@@ -561,7 +561,7 @@ $tick.Add_Tick({
             Update-ProfileIdentity | Out-Null
             # Claude reclaims claude:// each time it starts; keep ours in place while a
             # profile that might need to sign in is running.
-            if (-not (Test-RouterActive)) { try { Set-RouterRegistration } catch { } }
+            if (-not (Test-RouterRegistered)) { try { Set-RouterRegistration } catch { } }
         }
     } catch { }
 })

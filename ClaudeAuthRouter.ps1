@@ -56,7 +56,7 @@ if ($Unregister) { Restore-RouterRegistration; Clear-PendingLogin; return }
 
 if ($Expect) {
     Set-PendingLogin -Name $Expect -Minutes $Minutes
-    if (-not (Test-RouterActive)) { Set-RouterRegistration }
+    if (-not (Test-RouterRegistered)) { Set-RouterRegistration }
     "Next login callback within $Minutes minutes goes to '$Expect'."
     return
 }
@@ -96,7 +96,7 @@ try {
 
     # Two callback shapes: claude://login/... and, on current builds (2.7032, Store),
     # claude://claude.ai/sso-callback?code=...
-    if ($Url -notmatch '^claude://(login/|claude\.ai/sso-callback)') {
+    if ($Url -notmatch '^claude://(login/|claude\.ai/sso-callback(?:[/?#]|\z))') {
         Start-ClaudeWithUrl -Link $Url
         Write-RouterLog 'Non-login link; passed to Default.'
         return
@@ -130,7 +130,7 @@ try {
 
     # Claude re-registers the scheme as it starts; take it back so the next login works too.
     Start-Sleep -Seconds 4
-    try { if (-not (Test-RouterActive)) { Set-RouterRegistration } } catch { }
+    try { if (-not (Test-RouterRegistered)) { Set-RouterRegistration } } catch { }
 } catch {
     Write-RouterLog "FAILED: $($_.Exception.Message)"
     throw

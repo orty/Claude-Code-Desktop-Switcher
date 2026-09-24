@@ -944,13 +944,35 @@ function Test-RouterCommand {
     return ((Get-ItemProperty $script:CmdPath).'(default)' -like '*ClaudeAuthRouter*')
 }
 
+function Get-UserChoiceProgId {
+    # The ProgID the user picked in Default apps, or $null. Recent Windows 11 builds keep
+    # the live choice in UserChoiceLatest and can leave a stale UserChoice beside it, so
+    # that key wins when present. The hash cannot be verified from here (the algorithm is
+    # undocumented), but a choice with no hash at all is one Windows ignores.
+    foreach ($key in @("$($script:UserChoice)Latest", $script:UserChoice)) {
+        $v = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+        if (-not $v -or -not $v.Hash) { continue }
+        $id = $v.ProgId
+        if (-not $id) { $id = (Get-ItemProperty -LiteralPath "$key\ProgId" -ErrorAction SilentlyContinue).ProgId }
+        return $id
+    }
+    return $null
+}
+
 function Test-RouterChosen {
-    $choice = (Get-ItemProperty -LiteralPath $script:UserChoice -ErrorAction SilentlyContinue).ProgId
+    $choice = Get-UserChoiceProgId
     if ($choice) { return $choice -eq $script:RouterProgId }
     return $script:ClaudeApp.Kind -ne 'Msix'
 }
 
-function Test-RouterActive { return ((Test-RouterCommand) -and (Test-RouterChosen)) }
+function Test-RouterRegistered {
+    # Whether our registry entries are in place. Deliberately ignores the Default apps
+    # choice: rewriting them cannot change that, so callers that re-register when this is
+    # false do not rewrite the registry every few seconds while the choice is pending.
+    if (-not (Test-RouterCommand)) { return $false }
+    $prog = (Get-ItemProperty -LiteralPath "HKCU:\Software\Classes\$($script:RouterProgId)\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+    return ($prog -like '*ClaudeAuthRouter*')
+}
 
 function Get-RouterStateText {
     if (-not (Test-RouterCommand)) { return "Claude's (taken back when a profile is launched)" }
@@ -989,26 +1011,46 @@ function Set-RouterRegistration {
 }
 
 function Remove-RouterApp {
-    Remove-Item -LiteralPath "HKCU:\Software\Classes\$($script:RouterProgId)" -Recurse -Force -ErrorAction SilentlyContinue
+    # Returns a note for the revert log when the ProgID has to stay behind.
     Remove-Item -LiteralPath 'HKCU:\Software\ClaudeProfileSwitcher' -Recurse -Force -ErrorAction SilentlyContinue
     Remove-ItemProperty -LiteralPath 'HKCU:\Software\RegisteredApplications' -Name 'ClaudeProfileRouter' -ErrorAction SilentlyContinue
+    $prog = "HKCU:\Software\Classes\$($script:RouterProgId)"
+    if ((Get-UserChoiceProgId) -ne $script:RouterProgId) {
+        Remove-Item -LiteralPath $prog -Recurse -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+    # The user's Default apps choice still names this ProgID and only Settings can change
+    # it, so deleting the ProgID would leave claude:// pointing at nothing. Keep it and
+    # hand links straight to Claude instead, the way the router does for Default.
+    # Claude's path carries its version, so this lasts until Claude updates; the user
+    # picking Claude again is the real fix, hence the note.
+    $how = 'still routing'
+    if ($script:ClaudeExe -and (Test-Path -LiteralPath $script:ClaudeExe)) {
+        Set-ItemProperty -Path "$prog\shell\open\command" -Name '(default)' -Value ('"{0}" "%1"' -f $script:ClaudeExe)
+        Set-ItemProperty -Path "$prog\Application" -Name 'ApplicationName' -Value 'Claude'
+        $how = 'now opening Claude directly'
+    }
+    return "kept the claude:// entry picked in Default apps ($how); pick Claude there to finish: Settings > Default apps > CLAUDE"
 }
 
 function Restore-RouterRegistration {
-    Remove-RouterApp
-    if (Test-Path -LiteralPath $script:BackupPath) {
+    # One string: Undo-SwitcherChange adds it to a List[string].
+    $note = Remove-RouterApp
+    $msg = if (Test-Path -LiteralPath $script:BackupPath) {
         $saved = (Get-Content -LiteralPath $script:BackupPath -Raw | ConvertFrom-Json).Command
         New-Item -Path $script:CmdPath -Force | Out-Null
         Set-ItemProperty -Path $script:CmdPath -Name '(default)' -Value $saved
         Remove-Item -LiteralPath $script:BackupPath -Force
-        return 'restored the original claude:// handler'
-    }
-    if (Test-RouterCommand) {
+        'restored the original claude:// handler'
+    } elseif (Test-RouterCommand) {
         # No backup means we never saw an original; Claude re-registers itself on launch.
         Remove-Item -LiteralPath $script:KeyPath -Recurse -Force -ErrorAction SilentlyContinue
-        return 'removed the claude:// handler; Claude recreates it next time it starts'
+        'removed the claude:// handler; Claude recreates it next time it starts'
+    } else {
+        'claude:// handler was not ours; left alone'
     }
-    return 'claude:// handler was not ours; left alone'
+    if ($note) { return "$msg; $note" }
+    return $msg
 }
 
 function Set-PendingLogin {
@@ -1168,7 +1210,7 @@ function Start-ClaudeProfile {
 
         # A signed-out profile being launched is very likely about to sign in.
         if ((Test-ProfileSignedIn -Path $path) -ne $true) { Set-PendingLogin -Name $Name }
-        try { if (-not (Test-RouterActive)) { Set-RouterRegistration } } catch { }
+        try { if (-not (Test-RouterRegistered)) { Set-RouterRegistration } } catch { }
     }
 
     if (-not $Wait -or -not (Test-ProfileTaggable -Name $Name)) { return }
@@ -1191,7 +1233,7 @@ function Start-ClaudeProfile {
     }
     # Claude has re-registered claude:// by now; take it back and make sure the icon stuck.
     Start-Sleep -Milliseconds 1500
-    try { if (-not (Test-RouterActive)) { Set-RouterRegistration } } catch { }
+    try { if (-not (Test-RouterRegistered)) { Set-RouterRegistration } } catch { }
     Update-ProfileIdentity | Out-Null
 }
 
