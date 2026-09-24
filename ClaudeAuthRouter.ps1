@@ -13,7 +13,7 @@
       3. the running profile whose window was most recently in front
       4. Default, exactly as before
 
-    Only claude://login/... links are routed. Anything else goes to Default untouched.
+    Only sign-in callbacks (claude://login/... and claude://claude.ai/sso-callback...) are routed. Anything else goes to Default untouched.
     Claude re-registers itself as the handler every time it starts; the switcher takes
     the slot back whenever it launches a profile.
 
@@ -39,7 +39,7 @@ try { Initialize-ClaudeLib } catch { Write-RouterLog "FAILED to locate Claude: $
 if ($Status) {
     "Handler key:     $($script:CmdPath)"
     "Current command: $(if (Test-Path -LiteralPath $script:CmdPath) { (Get-ItemProperty $script:CmdPath).'(default)' } else { '<none>' })"
-    "Router active:   $(if (Test-RouterActive) { 'yes' } else { 'no - Claude owns the scheme until a profile is launched' })"
+    "Router active:   $(Get-RouterStateText)"
     "Backup saved:    $(Test-Path -LiteralPath $script:BackupPath)"
     "Pending login:   $(if ($p = Get-PendingLogin) { $p } else { '<none>' })"
     "Log:             $($script:RouterLog)"
@@ -94,7 +94,9 @@ try {
         return
     }
 
-    if ($Url -notmatch '^claude://login/') {
+    # Two callback shapes: claude://login/... and, on current builds (2.7032, Store),
+    # claude://claude.ai/sso-callback?code=...
+    if ($Url -notmatch '^claude://(login/|claude\.ai/sso-callback)') {
         Start-ClaudeWithUrl -Link $Url
         Write-RouterLog 'Non-login link; passed to Default.'
         return

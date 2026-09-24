@@ -119,7 +119,7 @@ re-registers itself as that handler every time it starts. The switcher takes the
 whenever it launches a profile, and `ClaudeAuthRouter.ps1` forwards each login callback
 to, in order: a profile explicitly expecting a login, otherwise the one running profile
 that is signed out, otherwise the profile whose window you most recently used, otherwise
-`Default`. Only `claude://login/...` links are routed; anything else behaves as before.
+`Default`. Only sign-in callbacks (`claude://login/...` and `claude://claude.ai/sso-callback...`) are routed; anything else behaves as before.
 Sign-in state is read from each profile's `config.json` by key presence and value length
 only; no token is ever read.
 

@@ -73,7 +73,7 @@ if ($Status) {
     "Default data:   $($script:DefaultProfilePath)"
     "Profiles root:  $($script:ProfileRoot)"
     "Tool files:     $($script:ToolRoot)"
-    "Login handler:  $(if (Test-RouterActive) { 'ours' } else { "Claude's (taken back when a profile is launched)" })"
+    "Login handler:  $(Get-RouterStateText)"
     "Handler backup: $(Test-Path -LiteralPath $script:BackupPath)"
     "Pending login:  $(if ($p = Get-PendingLogin) { $p } else { 'none' })"
     ''
@@ -483,7 +483,7 @@ function Show-StatusDialog {
         "Default data:    $($script:DefaultProfilePath)",
         "Profiles:        $($script:ProfileRoot)",
         "Tool files:      $($script:ToolRoot)",
-        "Login handler:   $(if (Test-RouterActive) { 'ours (sign-ins go to the profile that asked)' } else { "Claude's (taken back when you open a profile)" })",
+        "Login handler:   $(Get-RouterStateText)",
         "Handler backup:  $(Test-Path -LiteralPath $script:BackupPath)",
         "Pending login:   $(if ($p = Get-PendingLogin) { $p } else { 'none' })",
         ''

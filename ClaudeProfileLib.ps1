@@ -931,9 +931,31 @@ function Restore-DefaultIdentity {
 $script:KeyPath = "HKCU:\Software\Classes\$($script:Scheme)"
 $script:CmdPath = "$($script:KeyPath)\shell\open\command"
 
-function Test-RouterActive {
+# The Store (MSIX) build declares claude:// in its package manifest, and Windows prefers
+# that over the Classes key above. Only a user choice in Settings > Default apps beats it,
+# and Windows protects that choice with a hash, so it cannot be written from here. The
+# router is registered as a selectable app so the user can pick it once.
+$script:RouterProgId = 'ClaudeProfileRouter.claude'
+$script:CapPath      = 'HKCU:\Software\ClaudeProfileSwitcher\Capabilities'
+$script:UserChoice   = "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\$($script:Scheme)\UserChoice"
+
+function Test-RouterCommand {
     if (-not (Test-Path -LiteralPath $script:CmdPath)) { return $false }
     return ((Get-ItemProperty $script:CmdPath).'(default)' -like '*ClaudeAuthRouter*')
+}
+
+function Test-RouterChosen {
+    $choice = (Get-ItemProperty -LiteralPath $script:UserChoice -ErrorAction SilentlyContinue).ProgId
+    if ($choice) { return $choice -eq $script:RouterProgId }
+    return $script:ClaudeApp.Kind -ne 'Msix'
+}
+
+function Test-RouterActive { return ((Test-RouterCommand) -and (Test-RouterChosen)) }
+
+function Get-RouterStateText {
+    if (-not (Test-RouterCommand)) { return "Claude's (taken back when a profile is launched)" }
+    if (-not (Test-RouterChosen))  { return "Claude's - one-time step: Settings > Default apps > CLAUDE > Claude Profile Router" }
+    return 'ours (sign-ins go to the profile that asked)'
 }
 
 function Set-RouterRegistration {
@@ -949,10 +971,31 @@ function Set-RouterRegistration {
     Set-ItemProperty -Path $script:KeyPath -Name '(default)'    -Value "URL:$($script:Scheme)"
     Set-ItemProperty -Path $script:KeyPath -Name 'URL Protocol' -Value ''
     $l = Get-HeadlessLauncher
-    Set-ItemProperty -Path $script:CmdPath -Name '(default)' -Value ('"{0}" {1} -File "{2}" -Url "%1"' -f $l.Exe, $l.Prefix, $script:RouterScript)
+    $cmd = '"{0}" {1} -File "{2}" -Url "%1"' -f $l.Exe, $l.Prefix, $script:RouterScript
+    Set-ItemProperty -Path $script:CmdPath -Name '(default)' -Value $cmd
+    $prog = "HKCU:\Software\Classes\$($script:RouterProgId)"
+    New-Item -Path "$prog\shell\open\command" -Force | Out-Null
+    New-Item -Path "$prog\Application" -Force | Out-Null
+    New-Item -Path "$($script:CapPath)\URLAssociations" -Force | Out-Null
+    if (-not (Test-Path 'HKCU:\Software\RegisteredApplications')) { New-Item -Path 'HKCU:\Software\RegisteredApplications' | Out-Null }
+    Set-ItemProperty -Path $prog -Name '(default)'    -Value "URL:$($script:Scheme)"
+    Set-ItemProperty -Path $prog -Name 'URL Protocol' -Value ''
+    Set-ItemProperty -Path "$prog\shell\open\command" -Name '(default)' -Value $cmd
+    Set-ItemProperty -Path "$prog\Application" -Name 'ApplicationName' -Value 'Claude Profile Router'
+    Set-ItemProperty -Path $script:CapPath -Name 'ApplicationName' -Value 'Claude Profile Router'
+    Set-ItemProperty -Path $script:CapPath -Name 'ApplicationDescription' -Value 'Routes Claude sign-ins to the profile that asked'
+    Set-ItemProperty -Path "$($script:CapPath)\URLAssociations" -Name $script:Scheme -Value $script:RouterProgId
+    Set-ItemProperty -Path 'HKCU:\Software\RegisteredApplications' -Name 'ClaudeProfileRouter' -Value 'Software\ClaudeProfileSwitcher\Capabilities'
+}
+
+function Remove-RouterApp {
+    Remove-Item -LiteralPath "HKCU:\Software\Classes\$($script:RouterProgId)" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath 'HKCU:\Software\ClaudeProfileSwitcher' -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -LiteralPath 'HKCU:\Software\RegisteredApplications' -Name 'ClaudeProfileRouter' -ErrorAction SilentlyContinue
 }
 
 function Restore-RouterRegistration {
+    Remove-RouterApp
     if (Test-Path -LiteralPath $script:BackupPath) {
         $saved = (Get-Content -LiteralPath $script:BackupPath -Raw | ConvertFrom-Json).Command
         New-Item -Path $script:CmdPath -Force | Out-Null
@@ -960,7 +1003,7 @@ function Restore-RouterRegistration {
         Remove-Item -LiteralPath $script:BackupPath -Force
         return 'restored the original claude:// handler'
     }
-    if (Test-RouterActive) {
+    if (Test-RouterCommand) {
         # No backup means we never saw an original; Claude re-registers itself on launch.
         Remove-Item -LiteralPath $script:KeyPath -Recurse -Force -ErrorAction SilentlyContinue
         return 'removed the claude:// handler; Claude recreates it next time it starts'
