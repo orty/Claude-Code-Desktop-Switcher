@@ -173,6 +173,12 @@ a Windows limitation.
 - The `claude://` handler is taken back a few seconds after each profile launch, because
   Claude re-registers it on start. Launch profiles through the switcher or its shortcuts,
   not by running `Claude.exe --user-data-dir` yourself, or the handler will be Claude's.
+- **Only one profile at a time can use Cowork or local folders.** Both run in a local
+  Linux VM, and Claude desktop gives every profile of the same Windows user the same VM
+  ID. While one profile's VM is running, another profile's fails to start
+  (`HYPERVISOR_SERVICE_ERROR`). Quit the other Claude from its tray icon first. This is
+  a limitation of Claude desktop that this tool cannot work around, tracked in
+  [anthropics/claude-code#98613](https://github.com/anthropics/claude-code/issues/98613).
 
 ## What has been verified
 
