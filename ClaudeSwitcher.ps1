@@ -15,7 +15,7 @@
     Your original account is the "Default" profile. It is never modified.
 
     Files:
-      %LOCALAPPDATA%\ClaudeProfiles\<Name>\    a profile's data (Claude's, untouched)
+      %LOCALAPPDATA%\ClaudeProfile-<Name>\     a profile's data (Claude's, untouched)
       %LOCALAPPDATA%\ClaudeProfiles\settings.json   this tool's settings
       %LOCALAPPDATA%\ClaudeProfileSwitcher\    icons, logs, compiled helper (all disposable)
 
@@ -71,7 +71,7 @@ if ($Revert) {
 if ($Status) {
     "Install:        $($script:ClaudeApp.Kind)  $($script:ClaudeExe)"
     "Default data:   $($script:DefaultProfilePath)"
-    "Profiles root:  $($script:ProfileRoot)"
+    "Profiles:       $(Join-Path $env:LOCALAPPDATA $script:ProfileDirPrefix)<Name>"
     "Tool files:     $($script:ToolRoot)"
     "Login handler:  $(if (Test-RouterActive) { 'ours' } else { "Claude's (taken back when a profile is launched)" })"
     "Handler backup: $(Test-Path -LiteralPath $script:BackupPath)"
@@ -481,7 +481,7 @@ function Show-StatusDialog {
         "Install:         $($script:ClaudeApp.Kind)",
         "Claude.exe:      $($script:ClaudeExe)",
         "Default data:    $($script:DefaultProfilePath)",
-        "Profiles:        $($script:ProfileRoot)",
+        "Profiles:        $(Join-Path $env:LOCALAPPDATA $script:ProfileDirPrefix)<Name>",
         "Tool files:      $($script:ToolRoot)",
         "Login handler:   $(if (Test-RouterActive) { 'ours (sign-ins go to the profile that asked)' } else { "Claude's (taken back when you open a profile)" })",
         "Handler backup:  $(Test-Path -LiteralPath $script:BackupPath)",

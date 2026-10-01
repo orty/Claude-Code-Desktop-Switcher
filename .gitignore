@@ -1,5 +1,5 @@
 # Nothing this tool creates at runtime belongs in the repo. Profiles, settings and
-# logs all live under %LOCALAPPDATA%\ClaudeProfiles, not here, so this is mostly
+# logs all live under %LOCALAPPDATA%, not here, so this is mostly
 # a guard against stray local files.
 
 *.log

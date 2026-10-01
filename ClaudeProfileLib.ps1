@@ -8,12 +8,13 @@ Set-StrictMode -Off
 
 # ------------------------------------------------------------------- layout --
 #
-#   %LOCALAPPDATA%\ClaudeProfiles\<Name>\   one folder per extra profile (Claude's data)
+#   %LOCALAPPDATA%\ClaudeProfile-<Name>\    one folder per extra profile (Claude's data)
 #   %LOCALAPPDATA%\ClaudeProfiles\settings.json   this tool's settings (pre-existing location)
 #   %LOCALAPPDATA%\ClaudeProfileSwitcher\   everything this tool generates, so it can be
 #                                           removed in one go and never shows up as a profile
 #
 $script:ProfileRoot  = Join-Path $env:LOCALAPPDATA 'ClaudeProfiles'
+$script:ProfileDirPrefix = 'ClaudeProfile-'
 $script:SettingsPath = Join-Path $script:ProfileRoot 'settings.json'
 $script:ToolRoot     = Join-Path $env:LOCALAPPDATA 'ClaudeProfileSwitcher'
 $script:IconDir      = Join-Path $script:ToolRoot 'icons'
@@ -149,6 +150,7 @@ function Initialize-ClaudeLib {
     $script:ClaudeExe          = $script:ClaudeApp.Exe
     $script:DefaultProfilePath = $script:ClaudeApp.DefaultProfilePath
     if ($ClaudePathOverride) { Set-Setting 'ClaudePath' $script:ClaudeApp.Exe }
+    Move-LegacyProfileFolder
 }
 
 # Squirrel leaves app.ico next to the stub; otherwise pull from the exe.
@@ -229,7 +231,14 @@ function Test-ProfileLabel {
 function Get-ProfilePath {
     param([Parameter(Mandatory)][string]$Name)
     if ($Name -eq $script:DefaultName) { return $script:DefaultProfilePath }
-    return (Join-Path $script:ProfileRoot $Name)
+    # Directly under %LOCALAPPDATA%, never nested: Cowork's VM service rebuilds the data
+    # folder as AppData\Local\<leaf name> and refuses anything else, junctions included.
+    $path   = Join-Path $env:LOCALAPPDATA ($script:ProfileDirPrefix + $Name)
+    $legacy = Join-Path $script:ProfileRoot $Name
+    # Not moved yet (it was running, see Move-LegacyProfileFolder): keep using it
+    # rather than start an empty profile.
+    if (-not (Test-Path -LiteralPath $path) -and (Test-Path -LiteralPath $legacy)) { return $legacy }
+    return $path
 }
 
 function Get-ClaudeMainProcess {
@@ -301,11 +310,14 @@ function Get-ProfileList {
     }
 
     & $add $script:DefaultName $script:DefaultProfilePath $true
+    $names = @(Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Directory -Filter "$($script:ProfileDirPrefix)*" -ErrorAction SilentlyContinue |
+               ForEach-Object { $_.Name.Substring($script:ProfileDirPrefix.Length) })
+    # Plus any still in the old folder because it was running when the move was tried.
     if (Test-Path -LiteralPath $script:ProfileRoot) {
-        Get-ChildItem -LiteralPath $script:ProfileRoot -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -notlike '.*' } |   # never treat a hidden/tool folder as a profile
-            Sort-Object Name | ForEach-Object { & $add $_.Name $_.FullName $false }
+        $names += @(Get-ChildItem -LiteralPath $script:ProfileRoot -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -notlike '.*' } | ForEach-Object { $_.Name })   # never treat a hidden/tool folder as a profile
     }
+    $names | Where-Object { $_ } | Sort-Object -Unique | ForEach-Object { & $add $_ (Get-ProfilePath -Name $_) $false }
     return $result
 }
 
@@ -316,13 +328,13 @@ function Test-ProfileName {
     if ($Name -match '[\\/:*?"<>|]')                { return 'Name cannot contain \ / : * ? " < > |' }
     if ($Name.StartsWith('.'))                      { return 'Name cannot start with a dot.' }
     if ($Name.Length -gt 40)                        { return 'Name is too long (40 characters max).' }
-    if (Test-Path -LiteralPath (Join-Path $script:ProfileRoot $Name)) { return "A profile named '$Name' already exists." }
+    if (Test-Path -LiteralPath (Get-ProfilePath -Name $Name)) { return "A profile named '$Name' already exists." }
     return $null
 }
 
 function New-ClaudeProfile {
     param([Parameter(Mandatory)][string]$Name)
-    $path = Join-Path $script:ProfileRoot $Name
+    $path = Get-ProfilePath -Name $Name
     New-Item -ItemType Directory -Path $path -Force | Out-Null
     return $path
 }
@@ -330,10 +342,25 @@ function New-ClaudeProfile {
 function Remove-ClaudeProfile {
     param([Parameter(Mandatory)][string]$Name)
     if ($Name -eq $script:DefaultName) { throw 'The Default profile cannot be deleted.' }
-    $path = Join-Path $script:ProfileRoot $Name
+    $path = Get-ProfilePath -Name $Name
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     Set-ProfileAppearance -Name $Name -Label '' -Color '' -Badge ''
     Remove-ProfileIcon -Name $Name
+}
+
+function Move-LegacyProfileFolder {
+    # Profiles used to live in %LOCALAPPDATA%\ClaudeProfiles\<Name>, where Cowork's VM never
+    # starts (see Get-ProfilePath). Move each to its new home once. Same volume, so the move
+    # is a rename: it happens whole or not at all. A running profile holds its files open, so
+    # it stays put (Get-ProfilePath keeps finding it) and is retried on the next run.
+    if (-not (Test-Path -LiteralPath $script:ProfileRoot)) { return }
+    $running = Get-RunningProfileMap
+    foreach ($d in (Get-ChildItem -LiteralPath $script:ProfileRoot -Directory -ErrorAction SilentlyContinue)) {
+        if ($d.Name -like '.*' -or $running.ContainsKey($d.FullName)) { continue }
+        $target = Join-Path $env:LOCALAPPDATA ($script:ProfileDirPrefix + $d.Name)
+        if (Test-Path -LiteralPath $target) { continue }
+        try { Move-Item -LiteralPath $d.FullName -Destination $target -ErrorAction Stop } catch { }
+    }
 }
 
 # ------------------------------------------------------------------ interop --
@@ -854,7 +881,7 @@ function Update-ProfileIdentity {
     $tagged = 0
     $running = Get-RunningProfileMap
     foreach ($dir in $running.Keys) {
-        $name = if ($dir -eq $script:DefaultProfilePath.TrimEnd('\')) { $script:DefaultName } else { Split-Path $dir -Leaf }
+        $name = if ($dir -eq $script:DefaultProfilePath.TrimEnd('\')) { $script:DefaultName } else { (Split-Path $dir -Leaf) -replace "^$([regex]::Escape($script:ProfileDirPrefix))", '' }
         if (-not (Test-ProfileTaggable -Name $name)) { continue }
         $want = Get-ProfileAumid -Name $name
         foreach ($h in [ClaudeProfiles.Native]::WindowsForPid([uint32]$running[$dir], $true)) {

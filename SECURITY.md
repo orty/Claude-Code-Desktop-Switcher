@@ -2,7 +2,8 @@
 
 ## Scope
 
-This tool is a launcher. It creates directories under `%LOCALAPPDATA%\ClaudeProfiles`,
+This tool is a launcher. It creates `%LOCALAPPDATA%\ClaudeProfile-<Name>` directories
+(and moves ones made by earlier versions there from `%LOCALAPPDATA%\ClaudeProfiles`),
 starts the Claude desktop app with a `--user-data-dir` argument, creates shortcuts, and
 sets taskbar identity properties on Claude's windows. It does not modify the Claude
 application, handle credentials, or make network requests of its own.

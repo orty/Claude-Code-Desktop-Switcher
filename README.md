@@ -126,7 +126,16 @@ only; no token is ever read.
 **`Default` is left alone.** Your existing account keeps its directory, its own taskbar
 identity and, on the Store build, full package identity. The only thing that changes is
 the `claude://` handler, and only while an extra profile might need it. Profiles this
-tool creates live in `%LOCALAPPDATA%\ClaudeProfiles`, nowhere near Claude's own data.
+tool creates live in their own `%LOCALAPPDATA%\ClaudeProfile-<Name>` folders, apart from
+Claude's own data.
+
+**Profile folders sit directly under `%LOCALAPPDATA%`** because Cowork needs it. Its
+Windows service finds a profile's Linux VM image by taking only the data folder's name
+and looking for it under `%LOCALAPPDATA%` or `%APPDATA%`, and it refuses junctions. In a
+nested folder the VM never starts. Earlier versions of this tool kept profiles in
+`%LOCALAPPDATA%\ClaudeProfiles\<Name>`; each one is moved to its new place the next time
+the switcher or the sign-in router starts. A profile that is running at that moment is
+left where it is and still used from there, and moves on a later start.
 
 **Install paths contain the version number**, so they change on every update. The
 executable is resolved at click time rather than baked into shortcuts, which keeps
@@ -136,7 +145,7 @@ shortcuts working after Claude updates itself.
 
 | Where | What |
 | --- | --- |
-| `%LOCALAPPDATA%\ClaudeProfiles\<Name>\` | a profile's data. Claude's, never modified by this tool |
+| `%LOCALAPPDATA%\ClaudeProfile-<Name>\` | a profile's data. Claude's; this tool only moves it here from the old `ClaudeProfiles\<Name>\` location, never changes what is inside |
 | `%LOCALAPPDATA%\ClaudeProfiles\settings.json` | this tool's settings: remembered install, display names, colours, badges |
 | `%LOCALAPPDATA%\ClaudeProfileSwitcher\` | generated files: icons, logs, the compiled helper, a backup of the original `claude://` handler. Disposable |
 | `HKCU\Software\Classes\claude\shell\open\command` | the one registry value this tool changes, backed up before the first change |
