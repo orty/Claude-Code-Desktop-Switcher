@@ -164,8 +164,8 @@ flowchart LR
     S -->|--user-data-dir| W["Claude<br/>Work"]
     S -->|--user-data-dir| P["Claude<br/>Personal"]
     D --- DD[("Claude's own data<br/>never touched")]
-    W --- WD[("ClaudeProfiles\Work")]
-    P --- PD[("ClaudeProfiles\Personal")]
+    W --- WD[("ClaudeProfile-Work")]
+    P --- PD[("ClaudeProfile-Personal")]
 ```
 
 Claude ships in two shapes on Windows, and the switcher detects whichever you have:
@@ -181,7 +181,14 @@ Claude ships in two shapes on Windows, and the switcher detects whichever you ha
 - **`Default` is never touched.** On the Store build it is started through the shell app model
   rather than by running the `.exe`, so it keeps full package identity: `claude://` links, the
   native messaging host and auto update behave exactly as before. Profiles this tool creates
-  live in `%LOCALAPPDATA%\ClaudeProfiles`, nowhere near Claude's own data.
+  live in `%LOCALAPPDATA%\ClaudeProfile-<name>`, nowhere near Claude's own data.
+- **Profile folders sit directly under `%LOCALAPPDATA%`** because Cowork needs it. When a
+  Cowork task runs locally, its Windows service is told only the profile folder's name and
+  looks for the Linux VM image in `%LOCALAPPDATA%\<name>`, refusing junctions, so in a nested
+  folder the VM never starts. Earlier versions kept profiles in
+  `%LOCALAPPDATA%\ClaudeProfiles\<name>`; each one moves to its new place the next time the
+  switcher starts. A profile that is open at that moment stays where it is, is still used
+  from there, and moves on a later start.
 - **Sign-in routing is off until you turn it on.** It then writes the `claude://` handler under
   `HKCU\Software\Classes\claude`, a `ClaudeProfileRouter.claude` entry beside it, and an entry
   under `HKCU\Software\ClaudeProfileSwitcher` and `HKCU\Software\RegisteredApplications` so
@@ -268,6 +275,11 @@ outside the switcher, its old shortcut will report that the profile no longer ex
   automatically; pinned ones cannot be.
 - `claude://` links open in the `Default` account, except sign-ins once
   [sign-in routing](#signing-in-from-the-browser) is on.
+- Only one account at a time can run Cowork tasks locally. Claude desktop gives every
+  account of the same Windows user the same Linux VM, so a second account's VM fails to
+  start while another's is running; quit the other one from its tray icon first. Tasks run
+  in the cloud are not affected. Tracked in
+  [anthropics/claude-code#98613](https://github.com/anthropics/claude-code/issues/98613).
 - Each running account is a full copy of the app, so budget roughly one Claude's worth of
   memory per account. A profile grows to a few hundred MB, mostly caches.
 - This is about the desktop app only. The `claude` CLI uses its own `CLAUDE_CONFIG_DIR`
