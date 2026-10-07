@@ -63,7 +63,11 @@ try {
     $redirectedOld = Join-Path $cache 'Local\ClaudeProfiles\Personal\claude-code-sessions'
     New-Item -ItemType Directory -Path $redirectedOld -Force | Out-Null
     $script:Running = @{ (& $old 'Running') = 42 }
+    $script:LogPath = Join-Path $fixture 'switcher-error.log'
     Move-LegacyProfileFolder
+    $logged = Get-Content -LiteralPath $script:LogPath -Raw -ErrorAction SilentlyContinue
+    Assert ($logged -match "Left profile 'Blocked'.*already holds files") 'Skipped move not logged'
+    Assert ($logged -notmatch "'Running'") 'Open profile logged as a failure'
     Assert ((Test-Path (Join-Path (& $new 'Personal') 'config.json')) -and -not (Test-Path (& $old 'Personal'))) 'Profile not moved'
     Assert (Test-Path (Join-Path $cache 'Local\ClaudeProfile-Personal\claude-code-sessions')) 'Store-redirected files not moved along'
     Assert (Test-Path (Join-Path (& $old 'Running') 'config.json')) 'Running profile moved'
