@@ -56,10 +56,13 @@ Run the isolated regression tests with Windows PowerShell 5.1 and PowerShell 7:
     pwsh -NoProfile -File .\tests\ChatTransfer.Tests.ps1
     powershell -NoProfile -File .\tests\SignInRouting.Tests.ps1
     pwsh -NoProfile -File .\tests\SignInRouting.Tests.ps1
+    powershell -NoProfile -File .\tests\TaskbarIdentity.Tests.ps1
+    pwsh -NoProfile -File .\tests\TaskbarIdentity.Tests.ps1
 
-These tests use temporary session stores and never launch Claude or read real chats. The
-sign-in routing tests write only under a throwaway `HKCU\Software\ClaudeProfileSwitcherTests`
-key, which they delete again, and never touch your real `claude://` handler.
+These tests use temporary session stores and shortcuts, and never launch Claude or read real
+chats. The sign-in routing tests write only under a throwaway
+`HKCU\Software\ClaudeProfileSwitcherTests` key, which they delete again, and never touch your
+real `claude://` handler.
 
 Then actually run the thing. Most other behavior still needs manual checks because it
 touches real processes, real windows and real profile directories. At minimum, check that:
@@ -73,12 +76,14 @@ touches real processes, real windows and real profile directories. At minimum, c
 - Closing the window leaves it in the tray, and launching the switcher again brings the
   same window back instead of starting a second one.
 - `-List`, `-Launch`, `-Shortcut`, `-Tray` and `-Install` still behave.
-- A profile launched from a desktop shortcut opens a **visible** Claude window, and no
-  console window flashes up on the way.
 - If you touched sign-in routing: with it on, signing in to a newly added account in the
   browser lands in that account, `-Status` reports it correctly, and `-Revert` leaves
   `claude://` links opening Claude as before. On the Store build this needs the one-time
   pick in Settings > Default apps.
+- Each extra account's window gets its own taskbar button with its badge, whether it was
+  opened from the switcher, the tray or a shortcut, and `Default` keeps Claude's.
+- A profile launched from a desktop shortcut opens a **visible** Claude window, and no
+  console window flashes up on the way.
 
 That last one matters more than it looks. See the notes below.
 
