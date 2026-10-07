@@ -1737,11 +1737,21 @@ function Move-LegacyProfileFolder {
     foreach ($d in $old) {
         if ($running.ContainsKey($d.FullName.TrimEnd('\'))) { continue }
         $target = Join-Path $env:LOCALAPPDATA ($script:ProfileDirPrefix + $d.Name)
+        # Not moving is safe (Get-ProfilePath keeps using the old folder) but worth a line in
+        # the log: otherwise nobody learns why Cowork still fails in that profile.
+        $why = $null
         if (Test-Path -LiteralPath $target) {
-            if (@(Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue).Count) { continue }
-            try { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop } catch { continue }
+            if (@(Get-ChildItem -LiteralPath $target -Recurse -File -Force -ErrorAction SilentlyContinue).Count) {
+                $why = 'the new folder already holds files'
+            } else {
+                try { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop } catch { $why = "the empty new folder is in use: $($_.Exception.Message)" }
+            }
         }
-        try { Move-Item -LiteralPath $d.FullName -Destination $target -ErrorAction Stop } catch { continue }
+        if (-not $why) { try { Move-Item -LiteralPath $d.FullName -Destination $target -ErrorAction Stop } catch { $why = $_.Exception.Message } }
+        if ($why) {
+            try { Add-Content -LiteralPath $script:LogPath -Value ("[{0}] Left profile '{1}' in {2}, not moved to {3}: {4}" -f (Get-Date -Format 's'), $d.Name, $d.FullName, $target, $why) } catch { }
+            continue
+        }
         # The Store build can keep part of a profile's files in the package's LocalCache,
         # under the same relative path (see Get-CodeSessionRoot). That part moves along.
         if ($script:ClaudeApp.Kind -eq 'Msix') {
