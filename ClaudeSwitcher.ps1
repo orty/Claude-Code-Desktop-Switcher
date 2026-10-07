@@ -1754,12 +1754,17 @@ function Move-LegacyProfileFolder {
         }
         # The Store build can keep part of a profile's files in the package's LocalCache,
         # under the same relative path (see Get-CodeSessionRoot). That part moves along.
+        # Left behind, those files (Code sessions among them) no longer show in the profile.
         if ($script:ClaudeApp.Kind -eq 'Msix') {
             $cache = Join-Path (Split-Path (Split-Path $script:ClaudeApp.DefaultProfilePath -Parent) -Parent) 'Local'
             $from  = Join-Path $cache "ClaudeProfiles\$($d.Name)"
             $to    = Join-Path $cache ($script:ProfileDirPrefix + $d.Name)
-            if ((Test-Path -LiteralPath $from) -and -not (Test-Path -LiteralPath $to)) {
-                try { Move-Item -LiteralPath $from -Destination $to -ErrorAction Stop } catch { }
+            if (Test-Path -LiteralPath $from) {
+                $why = if (Test-Path -LiteralPath $to) { 'that folder already exists' } else { $null }
+                if (-not $why) { try { Move-Item -LiteralPath $from -Destination $to -ErrorAction Stop } catch { $why = $_.Exception.Message } }
+                if ($why) {
+                    try { Add-Content -LiteralPath $script:LogPath -Value ("[{0}] Left part of profile '{1}' in {2}, not moved to {3}: {4}" -f (Get-Date -Format 's'), $d.Name, $from, $to, $why) } catch { }
+                }
             }
         }
     }
